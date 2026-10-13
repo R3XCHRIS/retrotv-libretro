@@ -28,11 +28,11 @@ no Dispatcharr API client is needed for this.
   - The first `scale=...*sar` makes pixels square before cropping. Without it, anamorphic
     sources (seen: 1280x720 with SAR 405:539, a 4:3 picture) get cropped in storage pixels and come out stretched.
   - Sources seen: 1920x1080/1280x720/960x720/640x480/640x464/1920x824, 23.976–50 fps, mostly AC-3 5.1 (one 44.1 kHz).
-- [ ] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>`
+- [x] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>` (deployed Oct 2026 with the VAAPI fit profile)
 - [x] Core: fast path when a frame is already 640x480 square-pixel (no resize, no border clear; the
   YUV->RGB conversion still runs because decoders output YUV)
 - [x] Measure on the Pi, direct versus transcoded (Oct 2026, below)
-- [ ] Try hardware encode on Yoda (VAAPI) if the CPU cost of several transcodes is too high.
+- [x] Hardware encode on Yoda (VAAPI): now the default profile, see the measurements below.
   Don't use `-fflags +discardcorrupt` (it starves the VAAPI decoder).
 - [ ] Optional: let the output profile also set the frame rate (e.g. `fps=50` for PAL) once M2's 50 Hz option exists
 
@@ -42,16 +42,17 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 `scripts/cpu-summary.py`, % of one core, the Pi 5 has 400%). Sources: 640x480p24 AAC,
 1080p25 AC-3 5.1, 1280x720p24 anamorphic AC-3, 1080p50 AC-3, 720p25 AC-3. Transcoded = output profile "fit" (libx264).
 
-| | Direct | Transcoded (fit, x264) |
-|---|---|---|
-| Tune to picture, first visit | 2.8 / 4.0 / 5.2 / 14.6 s, one >16 s | 3.2 / 4.0 / 7.4 / 11.3 s, one >16 s |
-| Tune to picture, revisit after 10–20 s | 4.0–4.3 s | 4.0–4.9 s |
-| `retro_run` worst per second (median / p95 / max) | 1.7 / 3.7 / 23 ms | 1.5 / 2.4 / 21 ms |
-| Process CPU (avg / peak) | 26.6% / 78% | **10.8% / 22%** |
-| `retrotv-dec` + FFmpeg decoder threads (avg) | 6.6% + 12.0% | **1.1% + 1.9%** |
-| Peak threads | 7 | 7 |
-| A/V skew (avg / max) | 4.6–6.2 / 12 ms | 4.4–5.3 / 12 ms |
-| Dropped frames | 0 | 0 |
+| | Direct | Fit, libx264 | Fit, VAAPI (default) |
+|---|---|---|---|
+| Tune to picture, first visit | 2.8 / 4.0 / 5.2 / 14.6 s, one >16 s | 3.2 / 4.0 / 7.4 / 11.3 s, one >16 s | 3.3 / 4.2 / 4.8 / 12.0 / 13.9 s |
+| Tune to picture, revisit after 10–20 s | 4.0–4.3 s | 4.0–4.9 s | 4.0–5.3 s |
+| `retro_run` worst per second (median / p95 / max) | 1.7 / 3.7 / 23 ms | 1.5 / 2.4 / 21 ms | 1.8 / 2.5 / 2.7 ms |
+| Process CPU (avg / peak) | 26.6% / 78% | **10.8% / 22%** | **11.4% / 22%** |
+| `retrotv-dec` + FFmpeg decoder threads (avg) | 6.6% + 12.0% | **1.1% + 1.9%** | **1.2% + 2.4%** |
+| Peak threads | 7 | 7 | 7 |
+| A/V skew (avg / max) | 4.6–6.2 / 12 ms | 4.4–5.3 / 12 ms | 4.4–5.6 / 12 ms |
+| Dropped frames | 0 | 0 | 0 |
+| Yoda CPU per transcode (% of one N100 core) | – | 30–60% SD/720p, 130–190% 1080p50 | 20–40% SD/720p, 33–59% 1080p50 |
 
 - Tune time is dominated by Dispatcharr's upstream connection (2.7–13 s cold, variable run to
   run); the transcode adds about 0.1–0.7 s, and its first keyframe arrives with its first byte.
