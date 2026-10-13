@@ -1,3 +1,4 @@
+#define _GNU_SOURCE                   /* pthread_setname_np */
 #include "player.h"
 
 #include <math.h>
@@ -135,6 +136,9 @@ static void push_audio(player *p, const int16_t *s, int n, double pts)
 static void *thread_main(void *arg)
 {
   player *p = arg;
+#ifdef __linux__
+  pthread_setname_np(pthread_self(), "retrotv-dec");   /* visible in top -H / ps -L */
+#endif
   AVFormatContext *fmt = NULL;
   AVCodecContext *vdec = NULL, *adec = NULL;
   struct SwsContext *sws = NULL;
@@ -244,13 +248,18 @@ static void *thread_main(void *arg)
         int ox, oy, ow, oh;
         AVRational sar = fr->sample_aspect_ratio.num ? fr->sample_aspect_ratio : st->sample_aspect_ratio;
         fit_rect(fr, sar, &ox, &oy, &ow, &oh);
+        /* Fast path for streams pre-scaled on the server (Dispatcharr output
+         * profile): same size in and out, so swscale takes its unscaled
+         * YUV->RGB converter and there are no borders to clear. */
+        int native = fr->width == PLAYER_W && fr->height == PLAYER_H && ow == PLAYER_W && oh == PLAYER_H;
         sws = p_sws_getCachedContext(sws, fr->width, fr->height, (enum AVPixelFormat)fr->format,
-                                     ow, oh, AV_PIX_FMT_BGR0, SWS_BILINEAR, NULL, NULL, NULL);
+                                     ow, oh, AV_PIX_FMT_BGR0, native ? SWS_POINT : SWS_BILINEAR, NULL, NULL, NULL);
         if (sws) {
           pthread_mutex_lock(&p->mu);
           vslot *slot = &p->vq[(p->vhead + p->vcount) % VQ];
+          p->info.native = native;
           pthread_mutex_unlock(&p->mu);
-          memset(slot->px, 0, (size_t)PLAYER_W * PLAYER_H * 4);
+          if (ow != PLAYER_W || oh != PLAYER_H) memset(slot->px, 0, (size_t)PLAYER_W * PLAYER_H * 4);
           uint8_t *dst[4] = { (uint8_t *)(slot->px + (size_t)oy * PLAYER_W + ox), NULL, NULL, NULL };
           int dstride[4] = { PLAYER_W * 4, 0, 0, 0 };
           p_sws_scale(sws, (const uint8_t *const *)fr->data, fr->linesize, 0, fr->height, dst, dstride);

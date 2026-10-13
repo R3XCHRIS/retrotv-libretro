@@ -22,6 +22,7 @@ typedef struct {
   char vcodec[32], acodec[32];
   int width, height;
   double fps;
+  int native;          /* frames arrive at PLAYER_W x PLAYER_H square-pixel: no resize */
 } player_info;
 
 typedef struct player player;
