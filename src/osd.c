@@ -84,3 +84,24 @@ void osd_static(osd_surface *s, uint32_t *seed)
   }
   *seed = x;
 }
+
+void osd_static_vhs(osd_surface *s, uint32_t *seed, unsigned frame)
+{
+  int band = (int)((frame * 3u) % (unsigned)(s->h + 60)) - 30;     /* tracking band rolls down */
+  for (int y = 0; y < s->h; y++) {
+    uint32_t *row = s->px + (size_t)y * (size_t)s->pitch;
+    int dist = y - band, in_band = dist > -18 && dist < 18;
+    *seed ^= *seed << 13; *seed ^= *seed >> 17; *seed ^= *seed << 5;
+    int shift = (int)(*seed % 7) - 3;                              /* line jitter */
+    int lift = in_band ? 90 - (dist < 0 ? -dist : dist) * 4 : 0;
+    for (int x = 0; x < s->w; x++) {
+      *seed ^= *seed << 13; *seed ^= *seed >> 17; *seed ^= *seed << 5;
+      int v = (int)(*seed & 0xff) * 3 / 4 + lift + ((x + shift) & 8 ? 6 : 0);
+      int r = v + (int)((*seed >> 8) & 31) - 16, b = v + (int)((*seed >> 13) & 31) - 16;   /* chroma noise */
+      if (v > 255) v = 255;
+      r = r < 0 ? 0 : r > 255 ? 255 : r;
+      b = b < 0 ? 0 : b > 255 ? 255 : b;
+      row[x] = OSD_RGB(r, v, b);
+    }
+  }
+}
