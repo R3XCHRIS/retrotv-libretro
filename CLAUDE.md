@@ -29,8 +29,11 @@ Status: **prototype**. The core runs under our own headless test frontend
 - Alpha Player rejects URL entries in `.m3u` files, and lists of local files work.
   Channel flipping via named pipes (FIFOs) works in Alpha Player, but seeking
   (L/R) shows "Not supported" on a pipe.
-- Dispatcharr streams are MPEG-TS over HTTP. A cold channel can take ~3–6 s
-  to deliver its first byte.
+- Dispatcharr streams are MPEG-TS over HTTP (H.264 + AAC/AC-3; some PAL 50 fps).
+  A cold channel can take ~3–10 s to deliver its first byte, and occasionally
+  fails one attempt with "Invalid data found when processing input". The core retries.
+- Measured on the Pi with the harness: tune-to-picture 4–7 s cold and ~0.1 s warm,
+  `retro_run` 1–3 ms normally, at most 7 threads (no leak across channel changes).
 
 ## Build & test
 

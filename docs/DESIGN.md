@@ -24,4 +24,8 @@ grid, static between channels, and a blue NO SIGNAL screen.
 | Now / Next banner with progress | mockup | needs EPG (M1) |
 | Options menu | mockup | maps to libretro core options (M2) |
 
-Mockups: see the link in the repo description, or ask the maintainer.
+Mockups (private Claude design canvas, ask the maintainer for access):
+https://claude.ai/artifact/Lny4q3dTsFAPygoMHzHVbn
+
+It has four 4:3 screens (TV guide, Now Playing, channel change, Options), each with a
+Theme tweak (Cable Navy / Teletext / Green Phosphor) and a scanlines toggle.
