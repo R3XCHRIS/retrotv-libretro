@@ -126,6 +126,9 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
 - State: the last channel is saved in the frontend's save directory, which ReplayOS sets to
   `<storage>/saves/<system>/` (now `saves/avtest/retrotv-last-<playlist hash>.txt`). Moving
   slots means one fresh start. The EPG comes from the playlist's `x-tvg-url`.
+- Core options: ReplayOS accepts core options v2 and lists them in its in-game menu as
+  **System Settings** (next to System Input, System Media, Replay Options), with a save
+  entry; changes reach the core live (GET_VARIABLE_UPDATE).
 - Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
   and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
   `/media/sd/captures/<system>/`. `get_info` reports the display refresh (50/60 Hz).
