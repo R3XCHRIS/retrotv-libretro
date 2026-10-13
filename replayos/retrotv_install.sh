@@ -76,6 +76,14 @@ n=$(awk -v slot="[$SLOT]" '/^\[/{insec=($0==slot)} insec && /retrotv_libretro\.s
 [[ $n -eq 3 ]] || { cat "$STORAGE/retrotv/backup/cores.cfg.$NOW" >"$CFG"; die "cores.cfg edit failed - restored backup"; }
 say "[$SLOT] now launches RetroTV"
 
-[[ -f "$STORAGE/retrotv/playlist.txt" ]] || say "NOTE: add your M3U URL to $STORAGE/retrotv/playlist.txt"
+if [[ ! -f "$STORAGE/retrotv/playlist.txt" ]]; then
+  cat >"$STORAGE/retrotv/playlist.txt" <<'TEMPLATE'
+# RetroTV playlist
+# Put your M3U playlist link (or a full path to an .m3u file) on the first
+# line that doesn't start with #, then open RetroTV. For example, Dispatcharr:
+#   http://<server-ip>:9191/output/m3u/<channel-profile>
+TEMPLATE
+  say "created $STORAGE/retrotv/playlist.txt - put your M3U link in it"
+fi
 say "done - restarting ReplayOS in 3 s. Then open Extra > audio_video_test."
 ( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &
