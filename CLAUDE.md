@@ -53,6 +53,19 @@ make pi-test     # run on the Pi via SSH, screenshots -> build/pi-shots/
 - **Always look at the screenshots** in `build/pi-shots/` after a pi-test; the
   log alone doesn't prove anything is on screen.
 
+## Dispatcharr setup (stream source)
+
+Keep the core source-agnostic: it reads plain M3U + XMLTV. Dispatcharr-specific
+features are configured in Dispatcharr and selected through the playlist URL:
+
+- **Channel Profile** = the subset of channels RetroTV shows (`/output/m3u/<profile>`;
+  the EPG link `/output/epg/<profile>` arrives as `x-tvg-url` in the M3U header).
+- **Output Profile** = an ffmpeg pre-transcode (`pipe:0` → MPEG-TS `pipe:1`) that crops
+  and downscales to 640x480 on the server. It's selected with `?output_profile=<id>` on the
+  M3U link (exists in v0.32.0; `core.models.OutputProfile`).
+- Use the Dispatcharr REST API only for things the M3U can't do (e.g. resetting a stuck
+  channel), and only behind a token kept out of the repo.
+
 ## Architecture
 
 | File | Role |
