@@ -45,6 +45,7 @@ struct player {
   int vhead, vcount;
   uint32_t *shown;              /* last picture handed out */
   int have_shown;
+  player_stats stats;
 
   /* audio ring */
   int16_t *aq;
@@ -353,6 +354,7 @@ static void reset_buffers(player *p)
   p->attempt_err[0] = '\0';
   atomic_store(&p->attempt, 0);
   memset(&p->info, 0, sizeof(p->info));
+  memset(&p->stats, 0, sizeof(p->stats));
 }
 
 int player_open(player *p, const char *url)
@@ -389,6 +391,13 @@ void player_close(player *p)
 player_state player_get_state(player *p) { return (player_state)atomic_load(&p->state); }
 const char *player_error(player *p) { return p->err; }
 double player_tuning_seconds(player *p) { return now_mono() - p->open_time; }
+
+void player_get_stats(player *p, player_stats *st)
+{
+  pthread_mutex_lock(&p->mu);
+  *st = p->stats;
+  pthread_mutex_unlock(&p->mu);
+}
 
 int player_attempt(player *p, char *why, size_t n)
 {
@@ -476,6 +485,13 @@ int player_video(player *p, uint32_t *dst)
       else if (fabs(head->pts - p->clock) > 1.0) due = !advanced;   /* timestamp jump: resync, one per frame */
       else due = head->pts <= p->clock + 0.005;
       if (!due) break;
+      if (advanced) p->stats.dropped++;
+      if (p->clock_valid && !isnan(head->pts) && fabs(head->pts - p->clock) <= 1.0) {
+        double sk = fabs(p->clock - head->pts);
+        p->stats.skew_sum += sk;
+        if (sk > p->stats.skew_max) p->stats.skew_max = sk;
+      }
+      p->stats.shown++;
       /* keep the newest due frame */
       memcpy(p->shown, head->px, (size_t)PLAYER_W * PLAYER_H * 4);
       p->have_shown = 1;

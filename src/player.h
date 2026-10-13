@@ -25,6 +25,11 @@ typedef struct {
   int native;          /* frames arrive at PLAYER_W x PLAYER_H square-pixel: no resize */
 } player_info;
 
+typedef struct {
+  long shown, dropped;      /* video frames that came due / of those, skipped for a newer one */
+  double skew_sum, skew_max; /* |audio clock - pts| over the frames that came due, seconds */
+} player_stats;
+
 typedef struct player player;
 
 player *player_create(void);
@@ -38,6 +43,8 @@ void player_close(player *p);
 player_state player_get_state(player *p);
 const char *player_error(player *p);          /* valid while state == PLAYER_ERROR */
 void player_get_info(player *p, player_info *info);
+/* Playback stats since the last player_open (for the log and measurements). */
+void player_get_stats(player *p, player_stats *st);
 double player_tuning_seconds(player *p);      /* time since player_open */
 /* Current connection attempt (1-based); why = reason the previous one failed. */
 int player_attempt(player *p, char *why, size_t n);
