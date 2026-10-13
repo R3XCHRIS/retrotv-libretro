@@ -34,6 +34,8 @@
 - [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
 ## M3 — Into ReplayOS
-- [ ] Decide the integration path with the ReplayOS author (custom core hook vs. replacing `alpha_player`)
-- [ ] Installer and uninstaller with backups, survival check across ReplayOS updates
+- [x] Interim path: borrow the `pibench` slot (Extra → pibench), verified on 2.0.60
+- [x] Installer and uninstaller with backups (`replayos/`)
+- [ ] Ask the ReplayOS author for an official user-core hook
+- [ ] Check what a ReplayOS update does to the install (expect: re-run the installer)
 - [ ] Optional: hardware HEVC decode via V4L2 stateless (the Pi 5 only has HEVC hardware decode)

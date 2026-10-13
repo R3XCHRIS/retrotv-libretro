@@ -10,9 +10,9 @@ static while tuning, and "NO SIGNAL" on a dead channel. The target is
 **ReplayOS on a Raspberry Pi 5**, where Alpha Player can't play stream URLs.
 The source of the streams is Dispatcharr.
 
-Status: **prototype**. The core runs under our own headless test frontend
-(`tests/harness.c`) on the real Pi. It is **not installed into ReplayOS yet**
-(see "Deploying into ReplayOS" below).
+Status: **prototype**. It runs under our headless test frontend
+(`tests/harness.c`) and, since Oct 2026, **inside ReplayOS on the user's Pi via
+the `pibench` slot** (see "Deploying into ReplayOS" below).
 
 ## Verified facts about the target (checked on the real Pi, Oct 2026)
 
@@ -80,19 +80,29 @@ freezing.
 - Never commit playlists, stream URLs, tokens or screenshots of private channels.
 - Keep `make test` and `make check` passing (CI runs both and the cross-build).
 
-## Deploying into ReplayOS (not done yet — needs the user's go-ahead)
+## Deploying into ReplayOS (pibench slot — installed on the user's Pi)
 
-ReplayOS has a fixed list of systems, so the only way in today is to take over
-an existing system's core, most likely `alpha_player`:
+ReplayOS has a hardcoded system list and `_extra` only accepts `.lr`/`.sh`, so
+RetroTV borrows the **`[pibench]`** slot (Extra → pibench). Verified working on
+ReplayOS 2.0.60: launched from the menu, 29 channels, ~5.8 s cold tune.
 
-1. Back up `/opt/replay/cores/cores.cfg`.
-2. Copy `retrotv_libretro.so` into `/opt/replay/cores/`.
-3. Point `[alpha_player]` at it.
-
-The catches: this replaces Alpha Player for local video, ReplayOS updates
-probably overwrite both files, and ReplayOS may check file extensions itself.
-Investigate before doing it, and prefer asking the ReplayOS author for an
-official hook.
+- `replayos/retrotv_install.sh` (in `<storage>/roms/_extra/`, runs as root from
+  the Extra menu or SSH): copies `<storage>/retrotv/retrotv_libretro.so` to
+  `/opt/replay/cores/`, rewrites only `[pibench]` low/mid/hi, backs up
+  `cores.cfg` to `<storage>/retrotv/backup/` and `cores.cfg.pre-retrotv`,
+  restarts `replay.service`. Re-run after every ReplayOS update (A/B system
+  slot replaces `/opt/replay`).
+- `replayos/retrotv_uninstall.sh` restores `[pibench]` and removes the core.
+- Storage backups use plain `cp`: the NFS share squashes root, so `cp -p` fails.
+- ReplayOS launches the core with `/media/sd/roms/_extra/pibench.lr` (even with
+  NFS storage). The core then finds its playlist in this order: launched
+  `.m3u`, first line of the launched file, `/media/{nfs,usb,nvme,sd}/retrotv/playlist.txt`
+  (first line: URL or path), then `.../retrotv/channels.m3u`. No playlist → help screen.
+- Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
+  and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
+  `/media/sd/captures/pibench/`.
+- Update flow: CI artifact `retrotv-aarch64` → `<storage>/retrotv/` → re-run the installer.
+- The long-term fix is an official "user cores" hook from the ReplayOS author.
 
 ## Roadmap and design
 
