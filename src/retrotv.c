@@ -69,9 +69,22 @@ static void logf_(enum retro_log_level lvl, const char *fmt, ...)
 
 static double t_now(void) { return (double)frame_no / FPS; }
 
+/* One line per channel visit: frames shown and dropped, A/V skew. */
+static void log_stats(void)
+{
+  player_stats st;
+  if (!pl || !chans.count || !logged_playing) return;
+  player_get_stats(pl, &st);
+  long counted = st.shown - st.dropped;
+  logf_(RETRO_LOG_INFO, "ch %s stats: %ld frames shown, %ld dropped, A/V skew avg %.1f ms max %.1f ms",
+        chans.ch[cur].number, counted, st.dropped,
+        st.shown ? 1000.0 * st.skew_sum / st.shown : 0.0, 1000.0 * st.skew_max);
+}
+
 static void tune(size_t idx)
 {
   if (!chans.count) return;
+  log_stats();
   idx %= chans.count;
   if (idx != cur) prev = cur;
   cur = idx;
@@ -426,6 +439,7 @@ RETRO_API bool retro_load_game_special(unsigned t, const struct retro_game_info 
 
 RETRO_API void retro_unload_game(void)
 {
+  log_stats();
   if (pl) { player_destroy(pl); pl = NULL; }
   m3u_free(&chans);
 }
