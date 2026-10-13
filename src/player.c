@@ -146,12 +146,12 @@ static void *thread_main(void *arg)
   if (!fmt) { set_error(p, "out of memory", 0); goto done; }
   fmt->interrupt_callback.callback = interrupt_cb;
   fmt->interrupt_callback.opaque = p;
-  p_av_dict_set(&opts, "rw_timeout", "10000000", 0);       /* 10 s, us */
+  p_av_dict_set(&opts, "rw_timeout", "25000000", 0);       /* 25 s: cold IPTV channels start slowly */
   p_av_dict_set(&opts, "reconnect", "1", 0);
   p_av_dict_set(&opts, "reconnect_streamed", "1", 0);
   p_av_dict_set(&opts, "reconnect_delay_max", "4", 0);
-  p_av_dict_set(&opts, "probesize", "2000000", 0);         /* fast tuning */
-  p_av_dict_set(&opts, "analyzeduration", "2000000", 0);
+  p_av_dict_set(&opts, "probesize", "1000000", 0);         /* fast tuning */
+  p_av_dict_set(&opts, "analyzeduration", "1000000", 0);
   p_av_dict_set(&opts, "user_agent", "RetroTV/0.1 (libretro)", 0);
 
   atomic_store(&p->state, PLAYER_CONNECTING);
