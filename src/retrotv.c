@@ -459,7 +459,10 @@ RETRO_API void retro_run(void)
     logged_error = 1;
   }
   if (st == PLAYER_PLAYING && !logged_playing) {
-    logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs", chans.ch[cur].number, player_tuning_seconds(pl));
+    player_info in;
+    player_get_info(pl, &in);
+    logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs (%dx%d %s %.2ffps %s%s)", chans.ch[cur].number,
+          player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
     logged_playing = 1;
     banner_until = t_now() + BANNER_SECONDS;     /* show what came on */
   }
