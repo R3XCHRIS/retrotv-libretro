@@ -8,9 +8,13 @@ static inline uint32_t blend(uint32_t dst, uint32_t src, int a)
 {
   if (a >= 255) return src;
   if (a <= 0) return dst;
-  uint32_t rb = ((src & 0xff00ff) * (uint32_t)a + (dst & 0xff00ff) * (uint32_t)(255 - a)) / 255;
-  uint32_t g  = ((src & 0x00ff00) * (uint32_t)a + (dst & 0x00ff00) * (uint32_t)(255 - a)) / 255;
-  return (rb & 0xff00ff) | (g & 0x00ff00);
+  /* per channel: dividing packed red+blue by 255 leaked red's remainder into blue */
+  uint32_t out = 0;
+  for (int sh = 0; sh <= 16; sh += 8) {
+    uint32_t sc = (src >> sh) & 0xff, dc = (dst >> sh) & 0xff;
+    out |= ((sc * (uint32_t)a + dc * (uint32_t)(255 - a) + 127) / 255) << sh;
+  }
+  return out;
 }
 
 void osd_fill(osd_surface *s, int x, int y, int w, int h, uint32_t rgb, int alpha)
