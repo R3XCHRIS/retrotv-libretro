@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "aspect.h"
 #include "ffapi.h"
 
 #define VQ 6                                  /* decoded video frames held */
@@ -43,6 +44,9 @@ struct player {
   /* video queue (ring) */
   vslot vq[VQ];
   int vhead, vcount;
+  atomic_int zoom;              /* 1 = crop to fill 4:3 (TV aspect button) */
+  aspect_tracker bars;          /* decode thread only */
+  long vframes;                 /* decode thread only */
   uint32_t *shown;              /* last picture handed out */
   int have_shown;
   player_stats stats;
@@ -108,6 +112,41 @@ static void fit_rect(const AVFrame *f, AVRational sar, int *ox, int *oy, int *ow
   if (*oh < 2) *oh = 2;
   *ox = (PLAYER_W - *ow) / 2;
   *oy = (PLAYER_H - *oh) / 2;
+}
+
+/* 8-bit planar luma in plane 0 (yuv420p, nv12, ...): what aspect_bars reads. */
+static int luma8(const AVFrame *f)
+{
+  const AVPixFmtDescriptor *d = p_av_pix_fmt_desc_get((enum AVPixelFormat)f->format);
+  return d && !(d->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_HWACCEL | AV_PIX_FMT_FLAG_PAL))
+         && d->nb_components >= 3 && d->comp[0].plane == 0 && d->comp[0].depth == 8 && d->comp[0].step == 1;
+}
+
+/* Look for letterbox/pillarbox bars on every 3rd frame (cheap: sparse rows/columns). */
+static void track_bars(player *p, const AVFrame *f)
+{
+  int t, l;
+  if (p->vframes++ % 3 || !luma8(f)) return;
+  if (!aspect_bars(f->data[0], f->linesize[0], f->width, f->height, &t, &l)) return;
+  aspect_track(&p->bars, t, l);
+  pthread_mutex_lock(&p->mu);
+  p->info.bars_top = p->bars.top;
+  p->info.bars_left = p->bars.left;
+  pthread_mutex_unlock(&p->mu);
+}
+
+/* ZOOM: crop the frame to the 4:3 centre of the picture inside the bars. */
+static void zoom_crop(player *p, AVFrame *f, AVRational sar)
+{
+  int x, y, cw, ch;
+  double s = (sar.num > 0 && sar.den > 0) ? (double)sar.num / sar.den : 1.0;
+  aspect_zoom_rect(f->width, f->height, s, p->bars.top, p->bars.left, &x, &y, &cw, &ch);
+  if (cw >= f->width && ch >= f->height) return;
+  f->crop_left = (size_t)x;
+  f->crop_top = (size_t)y;
+  f->crop_right = (size_t)(f->width - x - cw);
+  f->crop_bottom = (size_t)(f->height - y - ch);
+  p_av_frame_apply_cropping(f, AV_FRAME_CROP_UNALIGNED);
 }
 
 static void push_audio(player *p, const int16_t *s, int n, double pts)
@@ -248,6 +287,8 @@ static void *thread_main(void *arg)
         if (wait_space(p, 1, 0)) break;
         int ox, oy, ow, oh;
         AVRational sar = fr->sample_aspect_ratio.num ? fr->sample_aspect_ratio : st->sample_aspect_ratio;
+        track_bars(p, fr);
+        if (atomic_load(&p->zoom)) zoom_crop(p, fr, sar);
         fit_rect(fr, sar, &ox, &oy, &ow, &oh);
         /* Fast path for streams pre-scaled on the server (Dispatcharr output
          * profile): same size in and out, so swscale takes its unscaled
@@ -361,6 +402,8 @@ static void reset_buffers(player *p)
   atomic_store(&p->attempt, 0);
   memset(&p->info, 0, sizeof(p->info));
   memset(&p->stats, 0, sizeof(p->stats));
+  aspect_track_reset(&p->bars);
+  p->vframes = 0;
 }
 
 int player_open(player *p, const char *url)
@@ -397,6 +440,8 @@ void player_close(player *p)
 player_state player_get_state(player *p) { return (player_state)atomic_load(&p->state); }
 const char *player_error(player *p) { return p->err; }
 double player_tuning_seconds(player *p) { return now_mono() - p->open_time; }
+
+void player_set_zoom(player *p, int zoom) { atomic_store(&p->zoom, zoom ? 1 : 0); }
 
 void player_get_stats(player *p, player_stats *st)
 {

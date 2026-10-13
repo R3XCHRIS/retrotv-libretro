@@ -23,6 +23,7 @@ typedef struct {
   int width, height;
   double fps;
   int native;          /* frames arrive at PLAYER_W x PLAYER_H square-pixel: no resize */
+  int bars_top, bars_left;  /* black bars detected in the stream (pixels) */
 } player_info;
 
 typedef struct {
@@ -43,6 +44,10 @@ void player_close(player *p);
 player_state player_get_state(player *p);
 const char *player_error(player *p);          /* valid while state == PLAYER_ERROR */
 void player_get_info(player *p, player_info *info);
+/* ZOOM (1) crops the picture inside any black bars to fill 4:3; FIT (0) shows
+ * the whole frame. Takes effect on the next decoded frame; kept across tunes. */
+void player_set_zoom(player *p, int zoom);
+
 /* Playback stats since the last player_open (for the log and measurements). */
 void player_get_stats(player *p, player_stats *st);
 double player_tuning_seconds(player *p);      /* time since player_open */
