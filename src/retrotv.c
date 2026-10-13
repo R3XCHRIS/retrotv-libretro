@@ -13,6 +13,7 @@
 #include "libretro.h"
 #include "ffapi.h"
 #include "epg.h"
+#include "guide.h"
 #include "lastch.h"
 #include "loud.h"
 #include "m3u.h"
@@ -73,6 +74,8 @@ static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
 static double toast_until;
 static uint32_t noise_seed = 12345;
 static int list_open;
+static int guide_open;              /* TV guide screen (Start) */
+static guide_view gv;
 static size_t list_cursor;
 static uint16_t pad_prev;
 static int logged_playing, logged_error, logged_attempt;
@@ -141,20 +144,6 @@ static void clip_copy(char *dst, size_t n, const char *src, size_t maxchars)
 }
 
 /* ---------- drawing ---------- */
-
-/* Shorten a title to max characters: drop a trailing " - S01E02" first, then
- * cut and remove any dangling separator so it never ends in " -". */
-static void fit_title(char *t, int max)
-{
-  if (max < 1) { t[0] = '\0'; return; }
-  if ((int)strlen(t) > max) {
-    char *d = strstr(t, " - S");
-    if (d && d[4] >= '0' && d[4] <= '9') *d = '\0';
-  }
-  if ((int)strlen(t) > max) t[max] = '\0';
-  size_t l = strlen(t);
-  while (l && (t[l - 1] == ' ' || t[l - 1] == '-' || t[l - 1] == ':' || t[l - 1] == ',')) t[--l] = '\0';
-}
 
 static void hhmm(time_t t, char *out, size_t n)
 {
@@ -244,7 +233,7 @@ static void draw_banner(osd_surface *s, player_state st)
     int lx = nx + 48, chars = (right - lx) / 16;      /* titles at 2x: 16 px per character */
     if (pn) {
       osd_text(s, nx, y + 4, "NOW", 1, OSD_RGB(240, 200, 40));
-      fit_title(now_t, chars);
+      epg_shorten(now_t, chars);
       osd_text_shadow(s, lx, y, now_t, 2, OSD_RGB(255, 255, 255));
       int bx0 = lx + 48, bw0 = right - 48 - bx0;      /* "19:40 [=====-----] 20:10" */
       osd_text(s, lx, y + 22, t0, 1, OSD_RGB(200, 200, 200));
@@ -255,7 +244,7 @@ static void draw_banner(osd_surface *s, player_state st)
     if (px) {
       osd_text(s, nx, y + 42, "NEXT", 1, OSD_RGB(240, 200, 40));
       char nl[64];
-      fit_title(next_t, (right - lx) / 8 - 7);            /* "20:40  " in front */
+      epg_shorten(next_t, (right - lx) / 8 - 7);            /* "20:40  " in front */
       snprintf(nl, sizeof(nl), "%s  %s", t2, next_t);
       osd_text(s, lx, y + 42, nl, 1, OSD_RGB(160, 200, 255));
     }
@@ -266,7 +255,7 @@ static void draw_banner(osd_surface *s, player_state st)
   int maxc = (right - nx) / 8;                       /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
   osd_text(s, nx, y, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
-  osd_text(s, nx, y + 16, "UP/DN CH  A INFO  B LAST  Y ZOOM  SELECT LIST", 1, OSD_RGB(130, 130, 160));
+  osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  SEL LIST  START GUIDE", 1, OSD_RGB(130, 130, 160));
 }
 
 static void draw_list(osd_surface *s)
@@ -628,6 +617,7 @@ static uint16_t read_pad(void)
     RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_A,
     RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L,
     RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_X,
+    RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
     RETRO_DEVICE_ID_JOYPAD_Y,
   };
   for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
@@ -649,6 +639,17 @@ static void handle_input(void)
 #define PAD_Y X
 #define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
   if (!chans.count) return;
+  if (guide_open) {
+    time_t now = time(NULL), first = guide_slot(now) - GUIDE_STEP, last = now + 24 * 3600;
+    if (PRESSED(UP))    gv.sel = gv.sel ? gv.sel - 1 : chans.count - 1;
+    if (PRESSED(DOWN))  gv.sel = (gv.sel + 1) % chans.count;
+    if (PRESSED(LEFT) && gv.t0 - GUIDE_STEP >= first) gv.t0 -= GUIDE_STEP;
+    if (PRESSED(RIGHT) && gv.t0 + GUIDE_STEP <= last) gv.t0 += GUIDE_STEP;
+    guide_scroll(&gv, chans.count);
+    if (FACE(PAD_A)) { guide_open = 0; if (gv.sel != cur) tune(gv.sel); }
+    if (FACE(PAD_B) || PRESSED(START)) guide_open = 0;
+    return;
+  }
   if (list_open) {
     if (PRESSED(UP))   list_cursor = list_cursor ? list_cursor - 1 : chans.count - 1;
     if (PRESSED(DOWN)) list_cursor = (list_cursor + 1) % chans.count;
@@ -661,6 +662,13 @@ static void handle_input(void)
   if (FACE(PAD_B))     tune(prev);
   if (FACE(PAD_A))     banner_until = t_now() + BANNER_SECONDS;
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
+  if (PRESSED(START)) {
+    guide_open = 1;
+    gv.sel = cur;
+    gv.t0 = guide_slot(time(NULL));
+    gv.top = cur > 2 ? cur - 2 : 0;                  /* a little context above */
+    guide_scroll(&gv, chans.count);
+  }
   if (FACE(PAD_Y)) {
     zoom = !zoom;
     player_set_zoom(pl, zoom);
@@ -836,7 +844,11 @@ RETRO_API void retro_run(void)
   }
 
   int show_banner = st != PLAYER_PLAYING || t_now() < banner_until;
-  if (list_open) draw_list(&s);
+  if (guide_open) {
+    pthread_mutex_lock(&guide_mu);
+    guide_draw(&s, &chans, guide, &gv, cur, time(NULL));
+    pthread_mutex_unlock(&guide_mu);
+  } else if (list_open) draw_list(&s);
   else if (show_banner) draw_banner(&s, st);
 
   if (t_now() < toast_until) draw_toast(&s);

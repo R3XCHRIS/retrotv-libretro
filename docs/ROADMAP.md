@@ -81,8 +81,8 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] Optional: live stream stats (resolution, bitrate, failover) in the info banner
 
 ## M1 — Feels like cable
-- [ ] **TV guide** (Select long-press or Start): XMLTV from the playlist's `x-tvg-url`
-  (Dispatcharr `/output/epg/...`), a 90-minute grid, scrolling listings
+- [x] **TV guide** (Start): XMLTV from the playlist's `x-tvg-url` (Dispatcharr `/output/epg/...`), a 90-minute
+  grid in 30-minute steps up to 24 h ahead, live preview window, info pane with description, red "now" line
 - [x] **Now / Next** in the banner from the EPG, with a progress bar for the current show (guide fetched
   from `x-tvg-url` on a background thread, refreshed every 2 h; banner grows only when there is guide data)
 - [ ] **Number entry**: type a channel number with the D-pad ("12_" → tune after 1.5 s)
