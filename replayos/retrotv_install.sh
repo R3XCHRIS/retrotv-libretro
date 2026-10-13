@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# RetroTV for ReplayOS - install into the "pibench" slot.
+#
+# Put this file in <storage>/roms/_extra/ and run it from the ReplayOS
+# Extra menu (or over SSH as root). Re-run it after every ReplayOS update:
+# updates replace /opt/replay, which undoes the install.
+#
+# Needs <storage>/retrotv/retrotv_libretro.so (storage = the ReplayOS storage
+# root: /media/nfs, /media/usb, /media/nvme or /media/sd).
+#
+# What it changes (with backups):
+#   /opt/replay/cores/retrotv_libretro.so      added
+#   /opt/replay/cores/cores.cfg [pibench]      low/mid/hi -> retrotv_libretro.so
+# pibench_libretro.so itself is left untouched; the uninstaller restores the slot.
+set -euo pipefail
+[[ "${1:-}" == "NULL" ]] && shift   # ReplayOS passes NULL when launched from the menu
+
+CORES=/opt/replay/cores
+CFG=$CORES/cores.cfg
+SLOT=pibench
+NOW=$(date +%Y%m%d-%H%M%S)
+
+say() { echo "[retrotv] $*"; }
+die() { echo "[retrotv] ERROR: $*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "run as root"
+[[ -f $CFG ]] || die "$CFG not found - is this ReplayOS?"
+grep -q "^\[$SLOT\]" "$CFG" || die "no [$SLOT] section in $CFG - ReplayOS changed; not installing"
+
+# storage root: this script lives in <storage>/roms/_extra, else search the usual mounts
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+STORAGE=""
+[[ -f "$HERE/../../retrotv/retrotv_libretro.so" ]] && STORAGE=$(cd "$HERE/../.." && pwd)
+if [[ -z $STORAGE ]]; then
+  for r in /media/nfs /media/usb /media/nvme /media/sd; do
+    [[ -f "$r/retrotv/retrotv_libretro.so" ]] && { STORAGE=$r; break; }
+  done
+fi
+[[ -n $STORAGE ]] || die "retrotv/retrotv_libretro.so not found on any storage"
+SRC=$STORAGE/retrotv/retrotv_libretro.so
+say "core: $SRC"
+
+mkdir -p "$STORAGE/retrotv/backup"
+[[ -f "$STORAGE/retrotv/backup/cores.cfg.original" ]] || cp -p "$CFG" "$STORAGE/retrotv/backup/cores.cfg.original"
+cp -p "$CFG" "$STORAGE/retrotv/backup/cores.cfg.$NOW"
+[[ -f "$CFG.pre-retrotv" ]] || cp -p "$CFG" "$CFG.pre-retrotv"
+say "backed up cores.cfg"
+
+install -m 0644 "$SRC" "$CORES/retrotv_libretro.so.new"
+mv -f "$CORES/retrotv_libretro.so.new" "$CORES/retrotv_libretro.so"
+say "installed $CORES/retrotv_libretro.so"
+
+tmp=$(mktemp)
+awk -v slot="[$SLOT]" '
+  /^\[/ { insec = ($0 == slot) }
+  insec && /^(low|mid|hi)[[:space:]]*=/ { split($0, kv, "="); gsub(/[[:space:]]/, "", kv[1]); print kv[1] " = \"retrotv_libretro.so\""; next }
+  { print }' "$CFG" >"$tmp"
+cat "$tmp" >"$CFG"
+rm -f "$tmp"
+n=$(awk -v slot="[$SLOT]" '/^\[/{insec=($0==slot)} insec && /retrotv_libretro\.so/' "$CFG" | wc -l)
+[[ $n -eq 3 ]] || { cp -p "$STORAGE/retrotv/backup/cores.cfg.$NOW" "$CFG"; die "cores.cfg edit failed - restored backup"; }
+say "[$SLOT] now launches RetroTV"
+
+[[ -f "$STORAGE/retrotv/playlist.txt" ]] || say "NOTE: add your M3U URL to $STORAGE/retrotv/playlist.txt"
+say "done - restarting ReplayOS in 3 s. Then open Extra > pibench."
+( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &

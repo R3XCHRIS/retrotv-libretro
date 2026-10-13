@@ -27,6 +27,9 @@ int m3u_parse(const char *text, const char *base_dir, m3u_list *out);
 int m3u_load(const char *path, m3u_list *out);
 void m3u_free(m3u_list *list);
 
+/* True if s looks like scheme://... (http, https, udp, ...). */
+int m3u_is_url(const char *s);
+
 /* Copy of s with non-ASCII bytes (emoji etc.) removed and whitespace trimmed. */
 char *m3u_ascii(const char *s);
 

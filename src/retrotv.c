@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "libretro.h"
@@ -40,6 +41,7 @@ static int list_open;
 static size_t list_cursor;
 static uint16_t pad_prev;
 static int logged_playing, logged_error, logged_attempt;
+static char help_reason[160];      /* why no channels loaded; shown on the help screen */
 
 /* ---------- helpers ---------- */
 
@@ -52,6 +54,17 @@ static void logf_(enum retro_log_level lvl, const char *fmt, ...)
   va_end(ap);
   if (log_cb) log_cb(lvl, "[RetroTV] %s\n", buf);
   else fprintf(stderr, "[RetroTV] %s\n", buf);
+  /* ReplayOS ships with logging off; keep our own small log in tmpfs */
+  FILE *f = fopen("/tmp/retrotv.log", "a");
+  if (f) {
+    time_t t = time(NULL);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    char ts[16];
+    strftime(ts, sizeof(ts), "%H:%M:%S", &tmv);
+    fprintf(f, "%s %s\n", ts, buf);
+    fclose(f);
+  }
 }
 
 static double t_now(void) { return (double)frame_no / FPS; }
@@ -160,6 +173,142 @@ static void draw_no_signal(osd_surface *s)
   osd_text_shadow(s, (PLAYER_W - osd_text_width(t, 4)) / 2, 150, t, 4, OSD_RGB(255, 255, 255));
 }
 
+static void draw_help(osd_surface *s)
+{
+  osd_fill(s, 0, 0, PLAYER_W, PLAYER_H, OSD_RGB(6, 16, 63), 255);
+  osd_fill(s, 32, 32, PLAYER_W - 64, 40, OSD_RGB(240, 200, 40), 255);
+  osd_text(s, 48, 44, "RETROTV - NO PLAYLIST", 2, OSD_RGB(6, 16, 63));
+  static const char *lines[] = {
+    "Put your M3U playlist URL or path",
+    "on the first line of:",
+    "",
+    "  <storage>/retrotv/playlist.txt",
+    "",
+    "for example",
+    "  http://dispatcharr:9191/output/m3u",
+    "",
+    "<storage> is the ReplayOS storage root,",
+    "e.g. the NFS share or the SD card.",
+  };
+  for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++)
+    osd_text(s, 48, 100 + (int)i * 26, lines[i], 2, OSD_RGB(255, 255, 255));
+  char r[80];
+  clip_copy(r, sizeof(r), help_reason, 66);
+  osd_text(s, 48, 400, r, 1, OSD_RGB(255, 140, 140));
+}
+
+/* ---------- playlist lookup ---------- */
+
+static char *slurp(const char *path, size_t max)
+{
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  char *buf = malloc(max + 1);
+  size_t n = buf ? fread(buf, 1, max, f) : 0;
+  fclose(f);
+  if (!buf) return NULL;
+  buf[n] = '\0';
+  return buf;
+}
+
+static char *fetch_url(const char *url, size_t max, char *err, size_t errlen)
+{
+  AVIOContext *io = NULL;
+  AVDictionary *o = NULL;
+  p_av_dict_set(&o, "rw_timeout", "10000000", 0);
+  p_av_dict_set(&o, "user_agent", "RetroTV/" RETROTV_VERSION " (libretro)", 0);
+  int rc = p_avio_open2(&io, url, AVIO_FLAG_READ, NULL, &o);
+  p_av_dict_free(&o);
+  if (rc < 0) { char e[96]; p_av_strerror(rc, e, sizeof(e)); snprintf(err, errlen, "fetch failed: %s", e); return NULL; }
+  char *buf = malloc(max + 1);
+  size_t len = 0;
+  while (buf && len < max) {
+    int n = p_avio_read(io, (unsigned char *)buf + len, (int)(max - len));
+    if (n <= 0) break;
+    len += (size_t)n;
+  }
+  p_avio_closep(&io);
+  if (buf) buf[len] = '\0';
+  return buf;
+}
+
+/* First line that isn't blank or a comment, trimmed (in place). */
+static char *first_line(char *t)
+{
+  for (char *line = strtok(t, "\r\n"); line; line = strtok(NULL, "\r\n")) {
+    while (*line == ' ' || *line == '\t') line++;
+    char *e = line + strlen(line);
+    while (e > line && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
+    if (*line && *line != '#') return line;
+  }
+  return NULL;
+}
+
+static int ends_with(const char *s, const char *suf)
+{
+  size_t a = strlen(s), b = strlen(suf);
+  return a >= b && !strcasecmp(s + a - b, suf);
+}
+
+/* Where the channel list comes from, in order:
+ *   1. the launched file itself if it is .m3u/.m3u8
+ *   2. first line of the launched file (.lr/.txt) - URL or path
+ *   3. <storage>/retrotv/playlist.txt (first line), storage = nfs, usb, nvme, sd
+ *   4. <storage>/retrotv/channels.m3u                                             */
+static int resolve_playlist(const char *game_path, char *out, size_t n)
+{
+  char buf[1024];
+  if (game_path && (ends_with(game_path, ".m3u") || ends_with(game_path, ".m3u8"))) {
+    snprintf(out, n, "%s", game_path);
+    return 0;
+  }
+  if (game_path) {
+    char *t = slurp(game_path, 4096), *l = t ? first_line(t) : NULL;
+    if (l) {
+      if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
+      else {
+        snprintf(buf, sizeof(buf), "%s", game_path);
+        char *slash = strrchr(buf, '/');
+        if (slash) *slash = '\0';
+        snprintf(out, n, "%s/%s", slash ? buf : ".", l);
+      }
+      free(t);
+      return 0;
+    }
+    free(t);
+  }
+  static const char *roots[] = { "/media/nfs", "/media/usb", "/media/nvme", "/media/sd" };
+  for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+    snprintf(buf, sizeof(buf), "%s/retrotv/playlist.txt", roots[i]);
+    char *t = slurp(buf, 4096), *l = t ? first_line(t) : NULL;
+    if (l) {
+      if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
+      else snprintf(out, n, "%s/retrotv/%s", roots[i], l);
+      free(t);
+      return 0;
+    }
+    free(t);
+    snprintf(buf, sizeof(buf), "%s/retrotv/channels.m3u", roots[i]);
+    FILE *f = fopen(buf, "rb");
+    if (f) { fclose(f); snprintf(out, n, "%s", buf); return 0; }
+  }
+  return -1;
+}
+
+static int load_playlist(const char *src)
+{
+  if (m3u_is_url(src)) {
+    char err[128] = "";
+    char *text = fetch_url(src, 8u << 20, err, sizeof(err));
+    if (!text) { snprintf(help_reason, sizeof(help_reason), "%s", err); return -1; }
+    int rc = m3u_parse(text, NULL, &chans);
+    free(text);
+    return rc;
+  }
+  if (m3u_load(src, &chans)) { snprintf(help_reason, sizeof(help_reason), "cannot read %s", src); return -1; }
+  return 0;
+}
+
 /* ---------- input ---------- */
 
 static uint16_t read_pad(void)
@@ -206,7 +355,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
   env_cb = cb;
   struct retro_log_callback logging;
   if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) log_cb = logging.log;
-  bool no_game = false;
+  bool no_game = true;   /* launched from ReplayOS Extra without a playlist path */
   cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
 }
 RETRO_API void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
@@ -220,7 +369,7 @@ RETRO_API void retro_get_system_info(struct retro_system_info *info)
   memset(info, 0, sizeof(*info));
   info->library_name = "RetroTV";
   info->library_version = RETROTV_VERSION;
-  info->valid_extensions = "m3u|m3u8";
+  info->valid_extensions = "m3u|m3u8|lr|txt";
   info->need_fullpath = true;
   info->block_extract = true;
 }
@@ -244,7 +393,6 @@ RETRO_API void retro_reset(void) { tune(cur); }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *game)
 {
-  if (!game || !game->path) { logf_(RETRO_LOG_ERROR, "no playlist given"); return false; }
   enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
   if (!env_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) { logf_(RETRO_LOG_ERROR, "XRGB8888 not supported"); return false; }
 
@@ -253,17 +401,25 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   p_av_log_set_level(AV_LOG_FATAL);   /* joining live streams mid-GOP logs harmless h264 errors */
   p_avformat_network_init();
 
-  if (m3u_load(game->path, &chans) || chans.count == 0) {
-    logf_(RETRO_LOG_ERROR, "no channels in %s", game->path);
-    m3u_free(&chans);
-    return false;
+  const char *gp = (game && game->path && *game->path) ? game->path : NULL;
+  char src[1024];
+  help_reason[0] = '\0';
+  logf_(RETRO_LOG_INFO, "RetroTV %s starting, content: %s", RETROTV_VERSION, gp ? gp : "(none)");
+  if (resolve_playlist(gp, src, sizeof(src))) {
+    snprintf(help_reason, sizeof(help_reason), "no playlist.txt found");
+  } else if (load_playlist(src) == 0 && chans.count == 0) {
+    snprintf(help_reason, sizeof(help_reason), "playlist has no channels: %.100s", src);
   }
-  logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, game->path);
   pl = player_create();
   if (!pl) { m3u_free(&chans); return false; }
   cur = prev = 0;
-  tune(0);
-  return true;
+  if (chans.count) {
+    logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, src);
+    tune(0);
+  } else {
+    logf_(RETRO_LOG_WARN, "no channels: %s", help_reason);
+  }
+  return true;          /* show the help screen rather than a cryptic load error */
 }
 
 RETRO_API bool retro_load_game_special(unsigned t, const struct retro_game_info *i, size_t n) { (void)t; (void)i; (void)n; return false; }
@@ -278,6 +434,16 @@ RETRO_API void retro_run(void)
 {
   input_poll_cb();
   handle_input();
+
+  if (!chans.count) {
+    osd_surface hs = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
+    draw_help(&hs);
+    memset(abuf, 0, sizeof(abuf));
+    video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+    audio_batch_cb(abuf, AFRAMES);
+    frame_no++;
+    return;
+  }
 
   player_state st = player_get_state(pl);
   player_audio(pl, abuf, AFRAMES, 1.0 / FPS);
