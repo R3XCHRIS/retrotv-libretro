@@ -19,9 +19,15 @@ no Dispatcharr API client is needed for this.
   Profiles; ffmpeg reading `pipe:0`, writing MPEG-TS to `pipe:1`), selected with
   `?output_profile=<id>` on the M3U link. Dispatcharr then appends it to every
   `/proxy/ts/stream/<uuid>` URL. One transcode runs per active channel and is shared by all clients.
-  Starting point (4:3 centre crop to 640x480, stereo 48 kHz AAC):
-  `-i pipe:0 -map 0:v:0 -map 0:a:0? -vf "crop='min(iw,ih*4/3)':ih,scale=640:480,setsar=1" -c:v libx264 -preset veryfast -tune zerolatency -g 50 -b:v 1500k -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
-  Also make a "fit" variant that pads instead of cropping, for channels where the sides matter.
+  Parameters (dry-run tested from the Mac on live channels; 640x480 SAR 1:1, source fps kept,
+  stereo 48 kHz AAC, a keyframe every second so joining a running transcode is quick):
+  - **crop** (fills the screen, loses the sides of 16:9):
+    `-i pipe:0 -map 0:v:0 -map 0:a:0? -vf "scale='trunc(iw*sar/2)*2':ih,setsar=1,crop='min(iw,ih*4/3)':ih,scale=640:480,setsar=1" -c:v libx264 -preset veryfast -tune zerolatency -force_key_frames "expr:gte(t,n_forced*1)" -b:v 1500k -maxrate 1800k -bufsize 1500k -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
+  - **fit** (letterboxes, keeps the whole picture): same, with
+    `-vf "scale='trunc(iw*sar/2)*2':ih,setsar=1,scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,setsar=1"`
+  - The first `scale=...*sar` makes pixels square before cropping. Without it, anamorphic
+    sources (seen: 1280x720 with SAR 405:539, a 4:3 picture) get cropped in storage pixels and come out stretched.
+  - Sources seen: 1920x1080/1280x720/960x720/640x480/640x464/1920x824, 23.976–50 fps, mostly AC-3 5.1 (one 44.1 kHz).
 - [ ] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>`
 - [ ] Core: fast path when a frame is already 640x480 square-pixel (skip sws scaling; just a copy)
 - [ ] Measure on the Pi, direct versus transcoded: tune time (expect +0.5–1.5 s for ffmpeg
