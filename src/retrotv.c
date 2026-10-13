@@ -9,6 +9,8 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #include "libretro.h"
 #include "ffapi.h"
@@ -55,6 +57,7 @@ static char last_path[1100];       /* where the last channel is remembered */
 static int saved_idx = -1;         /* channel index the file currently holds */
 static double played_at;           /* t_now() when the current channel started playing */
 static atomic_int saving;          /* a background write is running */
+static atomic_int save_errno;      /* last failed write (logged by retro_run), 0 = ok */
 #define REMEMBER_AFTER 5.0         /* seconds of watching before a channel counts as "last" */
 
 /* Programme guide: fetched and parsed on its own thread, swapped in under guide_mu. */
@@ -514,8 +517,27 @@ static void last_init(const char *src)
   logf_(RETRO_LOG_INFO, "last channel file: %s", last_path);
 }
 
+/* mkdir -p for the directory part of path (frontends may hand us a save
+ * directory that doesn't exist yet: ReplayOS does for the avtest slot) */
+static void make_parent_dirs(const char *path)
+{
+  char d[1100];
+  snprintf(d, sizeof(d), "%s", path);
+  char *slash = strrchr(d, '/');
+  if (!slash || slash == d) return;
+  *slash = '\0';
+  for (char *p = d + 1; *p; p++) {
+    if (*p != '/') continue;
+    *p = '\0';
+    mkdir(d, 0755);
+    *p = '/';
+  }
+  mkdir(d, 0755);
+}
+
 static int write_file(const char *path, const char *text)
 {
+  make_parent_dirs(path);
   char tmp[1200];
   snprintf(tmp, sizeof(tmp), "%s.tmp", path);
   FILE *f = fopen(tmp, "wb");
@@ -530,7 +552,7 @@ typedef struct { char path[1100]; char text[400]; } save_job;
 static void *save_main(void *arg)
 {
   save_job *j = arg;
-  write_file(j->path, j->text);
+  if (write_file(j->path, j->text)) atomic_store(&save_errno, errno ? errno : EIO);
   free(j);
   atomic_store(&saving, 0);
   return NULL;
@@ -822,6 +844,8 @@ RETRO_API void retro_run(void)
     follow_refresh(in.fps);
   }
 
+  int se = atomic_exchange(&save_errno, 0);
+  if (se) logf_(RETRO_LOG_WARN, "could not save last channel to %s: %s", last_path, strerror(se));
   if (atomic_load(&guide_msg_ready)) {
     logf_(RETRO_LOG_INFO, "%s", guide_msg);
     atomic_store(&guide_msg_ready, 0);

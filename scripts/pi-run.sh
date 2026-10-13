@@ -18,3 +18,5 @@ while kill -0 "$pid" 2>/dev/null; do
   sleep 1
 done > cpu.txt
 wait "$pid"
+# saved state (last channel), so tests can check it before the folder is removed
+find saves -type f 2>/dev/null | while read -r f; do echo "saved $f: $(tr '\n' ' ' < "$f")"; done >> run.log
