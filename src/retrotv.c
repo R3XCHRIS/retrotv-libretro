@@ -44,6 +44,7 @@ static int refresh_refused;        /* frontend said no to SET_SYSTEM_AV_INFO */
 static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
 static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
 static int audio_logged;
+static loud_state loud;            /* AGC on programme audio */
 static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
 static double toast_until;
 static uint32_t noise_seed = 12345;
@@ -87,9 +88,10 @@ static void log_stats(void)
   if (!pl || !chans.count || !logged_playing) return;
   player_get_stats(pl, &st);
   long counted = st.shown - st.dropped;
-  logf_(RETRO_LOG_INFO, "ch %s stats: %ld frames shown, %ld dropped, A/V skew avg %.1f ms max %.1f ms",
+  logf_(RETRO_LOG_INFO, "ch %s stats: %ld frames shown, %ld dropped, A/V skew avg %.1f ms max %.1f ms, audio gain %+.1f dB",
         chans.ch[cur].number, counted, st.dropped,
-        st.shown ? 1000.0 * st.skew_sum / st.shown : 0.0, 1000.0 * st.skew_max);
+        st.shown ? 1000.0 * st.skew_sum / st.shown : 0.0, 1000.0 * st.skew_max,
+        loud.gain > 0 ? 20.0 * log10(loud.gain) : 0.0);
 }
 
 static void tune(size_t idx)
@@ -103,6 +105,7 @@ static void tune(size_t idx)
   logged_playing = logged_error = 0;
   logged_attempt = 1;
   logf_(RETRO_LOG_INFO, "tune ch %s \"%s\"", chans.ch[cur].number, chans.ch[cur].name);
+  loud_reset(&loud);
   player_open(pl, chans.ch[cur].url);
 }
 
@@ -341,7 +344,6 @@ static int load_playlist(const char *src)
 static void send_audio(void)
 {
   size_t n = aframes();
-  loud_apply(abuf, n * 2, LOUD_GAIN_DB);
   audio_sent += n;
   audio_taken += audio_batch_cb(abuf, n);
   if (!audio_logged && t_now() > 10.0) {
@@ -545,6 +547,7 @@ RETRO_API void retro_run(void)
 
   player_state st = player_get_state(pl);
   player_audio(pl, abuf, aframes(), 1.0 / fps_out);
+  loud_process(&loud, abuf, aframes(), PLAYER_RATE);   /* even out channel loudness */
   st = player_get_state(pl);
   char why[160];
   int att = player_attempt(pl, why, sizeof(why));
@@ -575,7 +578,7 @@ RETRO_API void retro_run(void)
     /* quiet hiss while tuning */
     for (size_t i = 0; i < aframes(); i++) {
       noise_seed ^= noise_seed << 13; noise_seed ^= noise_seed >> 17; noise_seed ^= noise_seed << 5;
-      int16_t v = (int16_t)((int)(noise_seed & 0x7ff) - 0x400);
+      int16_t v = (int16_t)((int)(noise_seed & 0x1fff) - 0x1000);   /* about -23 dBFS, fixed (no AGC) */
       abuf[2 * i] = abuf[2 * i + 1] = v;
     }
   }
