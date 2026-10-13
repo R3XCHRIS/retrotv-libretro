@@ -2,7 +2,7 @@
 #
 #   make deps      fetch FFmpeg 7.1 headers (once)
 #   make           cross-build build/retrotv_libretro.so + build/harness for the Pi 5
-#   make test      host unit tests (parser, overlay)
+#   make test      host unit tests (parser, overlay, aspect)
 #   make check     host compile of everything with warnings as errors
 #   make pi-test   copy to the Pi and run the headless harness against real streams
 
@@ -13,7 +13,7 @@ FFINC   := deps/ffmpeg
 
 WARN    := -Wall -Wextra -Wno-unused-parameter
 CFLAGS  := -std=gnu11 -O2 -g $(WARN) -fPIC -fvisibility=hidden -Iinclude -I$(FFINC)
-SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/ffapi.c
+SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/ffapi.c
 
 all: build/retrotv_libretro.so build/harness
 
@@ -33,8 +33,10 @@ build:
 test: | build
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_m3u tests/test_m3u.c src/m3u.c
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_osd tests/test_osd.c src/osd.c
+	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_aspect tests/test_aspect.c src/aspect.c
 	build/test_m3u
 	build/test_osd
+	build/test_aspect
 
 check: $(FFINC)/.tag | build
 	$(HOSTCC) $(CFLAGS) -Werror -fsyntax-only $(SRCS)
