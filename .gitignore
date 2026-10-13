@@ -4,3 +4,6 @@ deps/
 .DS_Store
 tests/local/*
 !tests/local/README
+
+# local notes and prompts (may contain LAN addresses)
+*.local.md
