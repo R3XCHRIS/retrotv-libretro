@@ -49,6 +49,7 @@ struct stream {
   vslot vq[VQ];
   int vhead, vcount;
   atomic_int *zoom;             /* the player's aspect button: 1 = crop to fill 4:3 */
+  atomic_int *margin;           /* the player's overscan margin, percent per side */
   aspect_tracker bars;          /* decode thread only */
   long vframes;                 /* decode thread only */
   uint32_t *shown;              /* last picture handed out */
@@ -103,19 +104,22 @@ static int wait_space(stream *p, int need_video, size_t need_audio)
   return atomic_load(&p->abort) ? -1 : 0;
 }
 
-/* Scale into a 4:3 PLAYER_W x PLAYER_H frame, keeping the display aspect ratio. */
-static void fit_rect(const AVFrame *f, AVRational sar, int *ox, int *oy, int *ow, int *oh)
+/* Scale into the 4:3 PLAYER_W x PLAYER_H frame, inside an overscan margin of
+ * margin percent on every side, keeping the display aspect ratio. */
+static void fit_rect(const AVFrame *f, AVRational sar, int margin, int *ox, int *oy, int *ow, int *oh)
 {
+  int mx = (PLAYER_W * margin / 100) & ~1, my = (PLAYER_H * margin / 100) & ~1;
+  int aw = PLAYER_W - 2 * mx, ah = PLAYER_H - 2 * my;
   double s = (sar.num > 0 && sar.den > 0) ? (double)sar.num / sar.den : 1.0;
   double dar = (double)f->width * s / (double)f->height;
-  double out = (double)PLAYER_W / PLAYER_H;
-  if (dar > out) { *ow = PLAYER_W; *oh = (int)lround(PLAYER_W / dar); }
-  else           { *oh = PLAYER_H; *ow = (int)lround(PLAYER_H * dar); }
+  double out = (double)aw / ah;
+  if (dar > out) { *ow = aw; *oh = (int)lround(aw / dar); }
+  else           { *oh = ah; *ow = (int)lround(ah * dar); }
   *ow &= ~1; *oh &= ~1;
   if (*ow < 2) *ow = 2;
   if (*oh < 2) *oh = 2;
-  *ox = (PLAYER_W - *ow) / 2;
-  *oy = (PLAYER_H - *oh) / 2;
+  *ox = mx + (aw - *ow) / 2;
+  *oy = my + (ah - *oh) / 2;
 }
 
 /* 8-bit planar luma in plane 0 (yuv420p, nv12, ...): what aspect_bars reads. */
@@ -293,7 +297,7 @@ static void *thread_main(void *arg)
         AVRational sar = fr->sample_aspect_ratio.num ? fr->sample_aspect_ratio : st->sample_aspect_ratio;
         track_bars(p, fr);
         if (atomic_load(p->zoom)) zoom_crop(p, fr, sar);
-        fit_rect(fr, sar, &ox, &oy, &ow, &oh);
+        fit_rect(fr, sar, atomic_load(p->margin), &ox, &oy, &ow, &oh);
         /* Fast path for streams pre-scaled on the server (Dispatcharr output
          * profile): same size in and out, so swscale takes its unscaled
          * YUV->RGB converter and there are no borders to clear. */
@@ -365,7 +369,7 @@ done:
 static void stream_close(stream *p);
 static void stream_free(stream *p);
 
-static stream *stream_create(atomic_int *zoom)
+static stream *stream_create(atomic_int *zoom, atomic_int *margin)
 {
   stream *p = calloc(1, sizeof(*p));
   if (!p) return NULL;
@@ -378,6 +382,7 @@ static stream *stream_create(atomic_int *zoom)
   for (int i = 0; i < VQ; i++) ok = ok && p->vq[i].px;
   if (!ok) { stream_free(p); return NULL; }
   p->zoom = zoom;
+  p->margin = margin;
   return p;
 }
 
@@ -570,6 +575,7 @@ static int stream_video(stream *p, uint32_t *dst)
 struct player {
   stream *cur;
   atomic_int zoom;
+  atomic_int margin;
   pthread_mutex_t rmu;
   pthread_cond_t rcv;
   int reaping;                  /* streams still being closed */
@@ -642,7 +648,7 @@ void player_destroy(player *pl)
 int player_open(player *pl, const char *url)
 {
   retire(pl, pl->cur);
-  pl->cur = stream_create(&pl->zoom);
+  pl->cur = stream_create(&pl->zoom, &pl->margin);
   if (!pl->cur) return -1;
   return stream_open(pl->cur, url);
 }
@@ -657,6 +663,7 @@ player_state player_get_state(player *pl) { return pl->cur ? (player_state)atomi
 const char *player_error(player *pl) { return pl->cur ? pl->cur->err : ""; }
 double player_tuning_seconds(player *pl) { return pl->cur ? now_mono() - pl->cur->open_time : 0.0; }
 void player_set_zoom(player *pl, int zoom) { atomic_store(&pl->zoom, zoom ? 1 : 0); }
+void player_set_margin(player *pl, int percent) { atomic_store(&pl->margin, percent < 0 ? 0 : percent > 20 ? 20 : percent); }
 
 void player_get_stats(player *pl, player_stats *st)
 {

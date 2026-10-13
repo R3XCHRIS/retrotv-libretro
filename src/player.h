@@ -49,6 +49,9 @@ void player_get_info(player *p, player_info *info);
 /* ZOOM (1) crops the picture inside any black bars to fill 4:3; FIT (0) shows
  * the whole frame. Takes effect on the next decoded frame; kept across tunes. */
 void player_set_zoom(player *p, int zoom);
+/* Shrink the video into a margin of percent (0..20) on every side, for
+ * screens that cut off the edges. Takes effect on the next frame. */
+void player_set_margin(player *p, int percent);
 
 /* Playback stats since the last player_open (for the log and measurements). */
 void player_get_stats(player *p, player_stats *st);

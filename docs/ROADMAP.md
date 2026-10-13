@@ -96,10 +96,11 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] Zoom button (pad Y): FIT letterboxes, ZOOM crops the picture inside detected bars to fill 4:3
 - [x] Loudness: AGC to about -18 dBFS (gain -6..+18 dB, fast down/slow up) plus a soft limiter;
   channels measured from -13 to -39 dBFS, so a fixed boost distorted loud ones
-- [ ] Remember zoom per channel; loudness as an option
+- [x] Picture options: overscan margin 0/5/10 % (video only; menus stay in the safe area), default Fit/Zoom,
+  remember Y per channel (saved next to the last channel)
 - [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
 - [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
-- [ ] Option to pin 60 Hz (or 59.94) for displays that don't like mode changes
+- [x] Refresh option: Auto (follow the channel) / 60 Hz / 50 Hz, applied as soon as it changes
 - [x] Core options (ReplayOS: System Settings): banner timeout, 12/24 h clock, button hints, volume leveller
   Normal/Loud/Off, tuning static volume, colour theme (Cable Navy / Teletext / Green Phosphor),
   tuning picture (classic snow / VHS), channel-change click
