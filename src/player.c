@@ -259,6 +259,12 @@ static void *thread_main(void *arg)
           pthread_mutex_lock(&p->mu);
           vslot *slot = &p->vq[(p->vhead + p->vcount) % VQ];
           p->info.native = native;
+          /* a quick re-tune can open before the stream info is known */
+          if (!p->info.width) { p->info.width = fr->width; p->info.height = fr->height; }
+          if (p->info.fps <= 0) {
+            AVRational r = st->avg_frame_rate.den ? st->avg_frame_rate : st->r_frame_rate;
+            if (r.den && r.num) p->info.fps = (double)r.num / r.den;
+          }
           pthread_mutex_unlock(&p->mu);
           if (ow != PLAYER_W || oh != PLAYER_H) memset(slot->px, 0, (size_t)PLAYER_W * PLAYER_H * 4);
           uint8_t *dst[4] = { (uint8_t *)(slot->px + (size_t)oy * PLAYER_W + ox), NULL, NULL, NULL };
