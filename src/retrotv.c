@@ -12,6 +12,7 @@
 
 #include "libretro.h"
 #include "ffapi.h"
+#include "epg.h"
 #include "lastch.h"
 #include "loud.h"
 #include "m3u.h"
@@ -54,6 +55,20 @@ static int saved_idx = -1;         /* channel index the file currently holds */
 static double played_at;           /* t_now() when the current channel started playing */
 static atomic_int saving;          /* a background write is running */
 #define REMEMBER_AFTER 5.0         /* seconds of watching before a channel counts as "last" */
+
+/* Programme guide: fetched and parsed on its own thread, swapped in under guide_mu. */
+static pthread_mutex_t guide_mu = PTHREAD_MUTEX_INITIALIZER;
+static epg *guide;                 /* NULL until the first fetch succeeds */
+static pthread_t guide_thread;
+static int guide_thread_live;
+static atomic_int guide_stop;
+static char guide_url[1024];
+#define GUIDE_BACK (2 * 3600)          /* keep programmes from 2 h ago ... */
+#define GUIDE_AHEAD (26 * 3600)        /* ... to 26 h ahead */
+#define GUIDE_REFRESH (2 * 3600)       /* refetch every 2 h */
+#define GUIDE_RETRY 60                 /* after a failed fetch */
+static char guide_msg[160];            /* written by the guide thread, logged by retro_run */
+static atomic_int guide_msg_ready;     /* (the frontend's log callback may not be thread-safe) */
 static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
 static double toast_until;
 static uint32_t noise_seed = 12345;
@@ -127,6 +142,27 @@ static void clip_copy(char *dst, size_t n, const char *src, size_t maxchars)
 
 /* ---------- drawing ---------- */
 
+/* Shorten a title to max characters: drop a trailing " - S01E02" first, then
+ * cut and remove any dangling separator so it never ends in " -". */
+static void fit_title(char *t, int max)
+{
+  if (max < 1) { t[0] = '\0'; return; }
+  if ((int)strlen(t) > max) {
+    char *d = strstr(t, " - S");
+    if (d && d[4] >= '0' && d[4] <= '9') *d = '\0';
+  }
+  if ((int)strlen(t) > max) t[max] = '\0';
+  size_t l = strlen(t);
+  while (l && (t[l - 1] == ' ' || t[l - 1] == '-' || t[l - 1] == ':' || t[l - 1] == ',')) t[--l] = '\0';
+}
+
+static void hhmm(time_t t, char *out, size_t n)
+{
+  struct tm tmv;
+  localtime_r(&t, &tmv);
+  strftime(out, n, "%H:%M", &tmv);
+}
+
 static void draw_banner(osd_surface *s, player_state st)
 {
   const m3u_channel *c = &chans.ch[cur];
@@ -138,6 +174,33 @@ static void draw_banner(osd_surface *s, player_state st)
   clip_copy(num, sizeof(num), c->number, 6);
   clip_copy(name, sizeof(name), c->name, 26);
   clip_copy(group, sizeof(group), c->group ? c->group : "", 40);
+
+  /* Now / Next from the guide, if it has this channel */
+  const char *gid = c->tvg_id && *c->tvg_id ? c->tvg_id : c->number;
+  char now_t[48] = "", next_t[48] = "", t0[8] = "", t1[8] = "", t2[8] = "";
+  double frac = -1;
+  pthread_mutex_lock(&guide_mu);
+  const epg_prog *pn, *px;
+  time_t tnow = time(NULL);
+  epg_now_next(epg_find(guide, gid), tnow, &pn, &px);
+  if (pn) {
+    epg_ascii(pn->title, now_t, sizeof(now_t));
+    hhmm(pn->start, t0, sizeof(t0));
+    hhmm(pn->stop, t1, sizeof(t1));
+    frac = (double)(tnow - pn->start) / (double)(pn->stop - pn->start);
+  }
+  if (px) {
+    epg_ascii(px->title, next_t, sizeof(next_t));
+    hhmm(px->start, t2, sizeof(t2));
+  }
+  pthread_mutex_unlock(&guide_mu);
+  int has_guide = pn || px;
+  if (has_guide) {                                   /* taller banner, same bottom edge */
+    bh = 160;
+    by = PLAYER_H - 28 - bh;
+    osd_fill(s, bx, by, bw, bh, OSD_RGB(8, 16, 72), 255);
+    osd_fill(s, bx, by, bw, 3, OSD_RGB(240, 200, 40), 255);
+  }
 
   osd_text_shadow(s, bx + 14, by + 16, num, 4, OSD_RGB(255, 214, 64));
   int nx = bx + 14 + osd_text_width(num, 4) + 18;
@@ -176,10 +239,34 @@ static void draw_banner(osd_surface *s, player_state st)
   default:
     line[0] = '\0';
   }
-  int maxc = (bx + bw - 14 - nx) / 8;                 /* keep inside the banner */
+  int right = bx + bw - 14, y = by + 60;
+  if (has_guide) {
+    int lx = nx + 48, chars = (right - lx) / 16;      /* titles at 2x: 16 px per character */
+    if (pn) {
+      osd_text(s, nx, y + 4, "NOW", 1, OSD_RGB(240, 200, 40));
+      fit_title(now_t, chars);
+      osd_text_shadow(s, lx, y, now_t, 2, OSD_RGB(255, 255, 255));
+      int bx0 = lx + 48, bw0 = right - 48 - bx0;      /* "19:40 [=====-----] 20:10" */
+      osd_text(s, lx, y + 22, t0, 1, OSD_RGB(200, 200, 200));
+      osd_fill(s, bx0, y + 22, bw0, 8, OSD_RGB(40, 60, 130), 255);
+      if (frac > 0) osd_fill(s, bx0, y + 22, (int)(bw0 * (frac > 1 ? 1 : frac)), 8, OSD_RGB(240, 200, 40), 255);
+      osd_text(s, right - 40, y + 22, t1, 1, OSD_RGB(200, 200, 200));
+    }
+    if (px) {
+      osd_text(s, nx, y + 42, "NEXT", 1, OSD_RGB(240, 200, 40));
+      char nl[64];
+      fit_title(next_t, (right - lx) / 8 - 7);            /* "20:40  " in front */
+      snprintf(nl, sizeof(nl), "%s  %s", t2, next_t);
+      osd_text(s, lx, y + 42, nl, 1, OSD_RGB(160, 200, 255));
+    }
+    y += 62;
+  } else {
+    y += 6;
+  }
+  int maxc = (right - nx) / 8;                       /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
-  osd_text(s, nx, by + 66, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
-  osd_text(s, nx, by + 82, "UP/DN CH  A INFO  B LAST  Y ZOOM  SELECT LIST", 1, OSD_RGB(130, 130, 160));
+  osd_text(s, nx, y, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
+  osd_text(s, nx, y + 16, "UP/DN CH  A INFO  B LAST  Y ZOOM  SELECT LIST", 1, OSD_RGB(130, 130, 160));
 }
 
 static void draw_list(osd_surface *s)
@@ -247,13 +334,13 @@ static char *slurp(const char *path, size_t max)
   return buf;
 }
 
-static char *fetch_url(const char *url, size_t max, char *err, size_t errlen)
+static char *fetch_url(const char *url, size_t max, const AVIOInterruptCB *icb, char *err, size_t errlen)
 {
   AVIOContext *io = NULL;
   AVDictionary *o = NULL;
   p_av_dict_set(&o, "rw_timeout", "10000000", 0);
   p_av_dict_set(&o, "user_agent", "RetroTV/" RETROTV_VERSION " (libretro)", 0);
-  int rc = p_avio_open2(&io, url, AVIO_FLAG_READ, NULL, &o);
+  int rc = p_avio_open2(&io, url, AVIO_FLAG_READ, icb, &o);
   p_av_dict_free(&o);
   if (rc < 0) { char e[96]; p_av_strerror(rc, e, sizeof(e)); snprintf(err, errlen, "fetch failed: %s", e); return NULL; }
   char *buf = malloc(max + 1);
@@ -341,7 +428,7 @@ static int load_playlist(const char *src)
 {
   if (m3u_is_url(src)) {
     char err[128] = "";
-    char *text = fetch_url(src, 8u << 20, err, sizeof(err));
+    char *text = fetch_url(src, 8u << 20, NULL, err, sizeof(err));
     if (!text) { snprintf(help_reason, sizeof(help_reason), "%s", err); return -1; }
     int rc = m3u_parse(text, NULL, &chans);
     free(text);
@@ -349,6 +436,80 @@ static int load_playlist(const char *src)
   }
   if (m3u_load(src, &chans)) { snprintf(help_reason, sizeof(help_reason), "cannot read %s", src); return -1; }
   return 0;
+}
+
+/* ---------- programme guide ---------- */
+
+static void guide_note(const char *fmt, ...)
+{
+  if (atomic_load(&guide_msg_ready)) return;       /* previous one not logged yet: drop */
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(guide_msg, sizeof(guide_msg), fmt, ap);
+  va_end(ap);
+  atomic_store(&guide_msg_ready, 1);
+}
+
+static int guide_interrupt(void *opaque) { (void)opaque; return atomic_load(&guide_stop); }
+
+/* sleep up to secs, waking early when asked to stop */
+static void guide_sleep(int secs)
+{
+  for (int i = 0; i < secs * 10 && !atomic_load(&guide_stop); i++) {
+    struct timespec ts = { 0, 100 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
+}
+
+static void *guide_main(void *arg)
+{
+  (void)arg;
+  const AVIOInterruptCB icb = { guide_interrupt, NULL };
+  while (!atomic_load(&guide_stop)) {
+    char err[128] = "";
+    char *xml = fetch_url(guide_url, 32u << 20, &icb, err, sizeof(err));
+    epg *g = NULL;
+    if (xml) {
+      time_t now = time(NULL);
+      g = epg_parse(xml, now - GUIDE_BACK, now + GUIDE_AHEAD);
+      free(xml);
+    }
+    if (atomic_load(&guide_stop)) { epg_free(g); break; }
+    if (!g) {
+      guide_note("guide fetch failed (%s); retrying in %d s", *err ? err : "parse error", GUIDE_RETRY);
+      guide_sleep(GUIDE_RETRY);
+      continue;
+    }
+    guide_note("guide: %zu programmes on %zu channels", g->nprog, g->nch);
+    pthread_mutex_lock(&guide_mu);
+    epg *old = guide;
+    guide = g;
+    pthread_mutex_unlock(&guide_mu);
+    epg_free(old);
+    guide_sleep(GUIDE_REFRESH);
+  }
+  return NULL;
+}
+
+static void guide_start(const char *url)
+{
+  if (!url || !*url || guide_thread_live) return;
+  snprintf(guide_url, sizeof(guide_url), "%s", url);
+  atomic_store(&guide_stop, 0);
+  guide_thread_live = !pthread_create(&guide_thread, NULL, guide_main, NULL);
+}
+
+static void guide_shutdown(void)
+{
+  if (guide_thread_live) {
+    atomic_store(&guide_stop, 1);                   /* aborts a fetch in progress too */
+    pthread_join(guide_thread, NULL);
+    guide_thread_live = 0;
+  }
+  pthread_mutex_lock(&guide_mu);
+  epg_free(guide);
+  guide = NULL;
+  pthread_mutex_unlock(&guide_mu);
 }
 
 /* ---------- last channel ---------- */
@@ -583,6 +744,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   if (chans.count) {
     logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, src);
     last_init(src);
+    guide_start(chans.epg_url);
     char *t = slurp(last_path, 4096);
     int idx = lastch_find(&chans, t);
     free(t);
@@ -600,6 +762,7 @@ RETRO_API bool retro_load_game_special(unsigned t, const struct retro_game_info 
 RETRO_API void retro_unload_game(void)
 {
   log_stats();
+  guide_shutdown();
   if (pl) { player_destroy(pl); pl = NULL; }
   for (int i = 0; i < 200 && atomic_load(&saving); i++) {      /* let a pending write finish (max 2 s) */
     struct timespec ts = { 0, 10 * 1000000L };
@@ -651,6 +814,10 @@ RETRO_API void retro_run(void)
     follow_refresh(in.fps);
   }
 
+  if (atomic_load(&guide_msg_ready)) {
+    logf_(RETRO_LOG_INFO, "%s", guide_msg);
+    atomic_store(&guide_msg_ready, 0);
+  }
   if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
     last_save_async(cur);
 
