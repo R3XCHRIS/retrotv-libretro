@@ -1,0 +1,47 @@
+/* epg.h - programme guide from XMLTV (the playlist's x-tvg-url).
+ * Pure C with no FFmpeg dependency: the core fetches the text, this parses it.
+ * Only a window around "now" is kept, so a 17-day guide stays small. */
+#ifndef RETROTV_EPG_H
+#define RETROTV_EPG_H
+
+#include <stddef.h>
+#include <time.h>
+
+typedef struct {
+  time_t start, stop;      /* UTC */
+  char *title;
+  char *sub;               /* sub-title, may be NULL */
+  char *desc;              /* may be NULL; shortened */
+} epg_prog;
+
+typedef struct {
+  char *id;                /* XMLTV channel id = the playlist's tvg-id */
+  epg_prog *p;             /* sorted by start */
+  size_t n;
+} epg_chan;
+
+typedef struct {
+  epg_chan *ch;            /* sorted by id */
+  size_t nch;
+  size_t nprog;
+} epg;
+
+/* Parse XMLTV text, keeping programmes that overlap [from, to).
+ * Returns NULL on allocation failure; a guide with no programmes is valid. */
+epg *epg_parse(const char *xml, time_t from, time_t to);
+void epg_free(epg *g);
+
+/* Programmes for a channel id (NULL if unknown). */
+const epg_chan *epg_find(const epg *g, const char *id);
+
+/* The programme on air at t and the one after it (either may be NULL). */
+void epg_now_next(const epg_chan *c, time_t t, const epg_prog **now, const epg_prog **next);
+
+/* "20261013190635 +0000" -> UTC seconds; -1 if malformed. */
+time_t epg_time(const char *s);
+
+/* UTF-8 text to printable ASCII for the 8x8 font: common punctuation
+ * (curly quotes, dashes, middle dot, ellipsis) mapped, other non-ASCII dropped. */
+void epg_ascii(const char *in, char *out, size_t n);
+
+#endif
