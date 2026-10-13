@@ -34,7 +34,7 @@ no Dispatcharr API client is needed for this.
 - [x] Measure on the Pi, direct versus transcoded (Oct 2026, below)
 - [x] Hardware encode on Yoda (VAAPI): now the default profile, see the measurements below.
   Don't use `-fflags +discardcorrupt` (it starves the VAAPI decoder).
-- [ ] Optional: let the output profile also set the frame rate (e.g. `fps=50` for PAL) once M2's 50 Hz option exists
+- [x] ~~Let the output profile set the frame rate~~ — not needed: the core now switches the output to 50 Hz itself
 
 ### M1a measurements (Pi 5, harness, Oct 2026)
 
@@ -83,8 +83,12 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] Channel logos in the banner (fetched and cached as PNG/JPEG, decoded with FFmpeg)
 
 ## M2 — Options and QoL (libretro core options)
+- [x] Zoom button (pad Y): FIT letterboxes, ZOOM crops the picture inside detected bars to fill 4:3
+- [x] Loudness: +12 dB with a soft limiter, so TV audio is as loud as games
+- [ ] Remember zoom per channel; loudness as an option
 - [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
-- [ ] Refresh: 60 / 59.94 / 50 Hz, ideally following the stream (e.g. a 50 fps PAL channel judders at 60 Hz)
+- [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
+- [ ] Option to pin 60 Hz (or 59.94) for displays that don't like mode changes
 - [ ] Static style: off / classic / VHS; channel-change "blip" sound on or off
 - [ ] Banner timeout, clock 12h/24h, colour theme (Cable Navy, Teletext, Green Phosphor)
 - [ ] Sleep timer ("SLEEP 30")
@@ -98,7 +102,8 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
 ## M3 — Into ReplayOS
-- [x] Interim path: borrow the `pibench` slot (Extra → pibench), verified on 2.0.60
+- [x] Interim path: borrow a slot. `pibench` turned out to be muted by ReplayOS; now `avtest`
+      (Extra → audio_video_test), with sound, verified on 2.0.60
 - [x] Installer and uninstaller with backups (`replayos/`)
 - [ ] Ask the ReplayOS author for an official user-core hook
 - [ ] Check what a ReplayOS update does to the install (expect: re-run the installer)
