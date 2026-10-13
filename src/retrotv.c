@@ -187,8 +187,8 @@ static void draw_help(osd_surface *s)
     "for example",
     "  http://dispatcharr:9191/output/m3u",
     "",
-    "<storage> is the ReplayOS storage root,",
-    "e.g. the NFS share or the SD card.",
+    "<storage> = ReplayOS storage,",
+    "e.g. the NFS share or SD card.",
   };
   for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++)
     osd_text(s, 48, 100 + (int)i * 26, lines[i], 2, OSD_RGB(255, 255, 255));
