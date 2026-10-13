@@ -13,12 +13,15 @@ libretro core for **ReplayOS on the Raspberry Pi 5**.
 
 ## Controls (prototype)
 
+Button names are the labels on an Xbox-style pad (ReplayOS maps pads by position).
+
 | Button | Action |
 |---|---|
 | D-pad Up / R | Channel up |
 | D-pad Down / L | Channel down |
-| B | Last channel |
 | A | Show info banner |
+| B | Last channel |
+| Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM) |
 | Select | Channel list (Up/Down, A to tune, B to close) |
 
 ## Install on ReplayOS (borrows the PiBench slot)
