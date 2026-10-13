@@ -24,6 +24,17 @@ int main(void)
   CHECK(((c >> 16) & 0xff) >= 99 && ((c >> 16) & 0xff) <= 101);
   CHECK(((c >> 8) & 0xff) >= 49 && ((c >> 8) & 0xff) <= 51);
 
+  /* over a coloured picture: each channel blends on its own (red used to leak into blue) */
+  for (int i = 0; i < W * H; i++) px[i] = OSD_RGB(200, 150, 100);
+  osd_fill(&s, 0, 0, W, H, OSD_RGB(8, 16, 72), 235);
+  c = px[0];
+  CHECK(((c >> 16) & 0xff) == (8 * 235 + 200 * 20 + 127) / 255);
+  CHECK(((c >> 8) & 0xff) == (16 * 235 + 150 * 20 + 127) / 255);
+  CHECK((c & 0xff) == (72 * 235 + 100 * 20 + 127) / 255);
+  for (int i = 0; i < W * H; i++) px[i] = OSD_RGB(255, 255, 255);
+  osd_fill(&s, 0, 0, W, H, OSD_RGB(255, 0, 0), 128);             /* no channel overflows */
+  CHECK(px[0] == OSD_RGB(255, 127, 127));
+
   memset(px, 0, sizeof(px));
   CHECK(osd_text_width("AB", 2) == 32);
   int w = osd_text(&s, 0, 0, "I", 1, OSD_RGB(255, 255, 255));
