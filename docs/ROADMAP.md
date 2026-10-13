@@ -106,7 +106,8 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] Preview tile in the guide (live picture of the highlighted channel)
 
 ## Known issues (from Pi testing)
-- [ ] Channel change blocks `retro_run` while the old stream closes (up to ~70 ms seen): close on a background thread
+- [x] Channel change blocked `retro_run` while the old stream closed (up to ~99 ms seen): now closed on a
+  background reaper thread; 20 channel changes in 10 s on the Pi kept `retro_run` at 6 ms or less
 - [ ] Tuning takes 4–7 s on cold Dispatcharr channels; a warm channel can start in under 1 s
 - [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
