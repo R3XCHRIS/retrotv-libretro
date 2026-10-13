@@ -15,6 +15,7 @@
 #define NANCHOR 32
 #define PREBUFFER_AUDIO 0.30                  /* seconds before PLAYING */
 #define BUFFER_TIMEOUT 4.0                    /* give up waiting for A+V sync */
+#define OPEN_ATTEMPTS 3                       /* cold IPTV channels sometimes fail once */
 
 typedef struct { uint32_t *px; double pts; } vslot;
 typedef struct { uint64_t pos; double pts; } anchor;
@@ -29,7 +30,9 @@ struct player {
   pthread_cond_t cv;            /* producer waits for space */
 
   atomic_int state;
+  atomic_int attempt;           /* 1-based connection attempt */
   char err[160];
+  char attempt_err[160];        /* why the previous attempt failed */
   player_info info;
   double open_time;
   double play_start_mono;       /* for streams without audio */
@@ -142,23 +145,47 @@ static void *thread_main(void *arg)
   int16_t *abuf = NULL;
   int abuf_cap = 0, vi = -1, ai = -1, rc;
 
-  fmt = p_avformat_alloc_context();
-  if (!fmt) { set_error(p, "out of memory", 0); goto done; }
-  fmt->interrupt_callback.callback = interrupt_cb;
-  fmt->interrupt_callback.opaque = p;
-  p_av_dict_set(&opts, "rw_timeout", "25000000", 0);       /* 25 s: cold IPTV channels start slowly */
-  p_av_dict_set(&opts, "reconnect", "1", 0);
-  p_av_dict_set(&opts, "reconnect_streamed", "1", 0);
-  p_av_dict_set(&opts, "reconnect_delay_max", "4", 0);
-  p_av_dict_set(&opts, "probesize", "1000000", 0);         /* fast tuning */
-  p_av_dict_set(&opts, "analyzeduration", "1000000", 0);
-  p_av_dict_set(&opts, "user_agent", "RetroTV/0.1 (libretro)", 0);
+  for (int attempt = 1;; attempt++) {
+    const char *what;
+    atomic_store(&p->attempt, attempt);
+    atomic_store(&p->state, PLAYER_CONNECTING);
+    fmt = p_avformat_alloc_context();
+    if (!fmt) { set_error(p, "out of memory", 0); goto done; }
+    fmt->interrupt_callback.callback = interrupt_cb;
+    fmt->interrupt_callback.opaque = p;
+    p_av_dict_free(&opts);                                   /* open_input consumes it */
+    p_av_dict_set(&opts, "rw_timeout", "25000000", 0);       /* 25 s: cold IPTV channels start slowly */
+    p_av_dict_set(&opts, "reconnect", "1", 0);
+    p_av_dict_set(&opts, "reconnect_streamed", "1", 0);
+    p_av_dict_set(&opts, "reconnect_delay_max", "4", 0);
+    p_av_dict_set(&opts, "probesize", "1000000", 0);         /* fast tuning */
+    p_av_dict_set(&opts, "analyzeduration", "1000000", 0);
+    p_av_dict_set(&opts, "user_agent", "RetroTV/0.1 (libretro)", 0);
 
-  atomic_store(&p->state, PLAYER_CONNECTING);
-  rc = p_avformat_open_input(&fmt, p->url, NULL, &opts);
-  if (rc < 0) { fmt = NULL; if (!atomic_load(&p->abort)) set_error(p, "could not open stream", rc); goto done; }
-  rc = p_avformat_find_stream_info(fmt, NULL);
-  if (rc < 0) { if (!atomic_load(&p->abort)) set_error(p, "could not read stream", rc); goto done; }
+    rc = p_avformat_open_input(&fmt, p->url, NULL, &opts);
+    if (rc >= 0) {
+      rc = p_avformat_find_stream_info(fmt, NULL);
+      if (rc >= 0) break;
+      p_avformat_close_input(&fmt);
+      what = "could not read stream";
+    } else {
+      fmt = NULL;                                             /* freed by open_input */
+      what = "could not open stream";
+    }
+    if (atomic_load(&p->abort)) goto done;
+    int fatal = rc == AVERROR_HTTP_NOT_FOUND || rc == AVERROR_HTTP_FORBIDDEN || rc == AVERROR_HTTP_UNAUTHORIZED;
+    if (fatal || attempt >= OPEN_ATTEMPTS) { set_error(p, what, rc); goto done; }
+    char buf[96] = "";
+    p_av_strerror(rc, buf, sizeof(buf));
+    pthread_mutex_lock(&p->mu);
+    snprintf(p->attempt_err, sizeof(p->attempt_err), "%s: %s", what, buf);
+    pthread_mutex_unlock(&p->mu);
+    for (int i = 0; i < 30 && !atomic_load(&p->abort); i++) {   /* 1.5 s, interruptible */
+      struct timespec ts = { 0, 50 * 1000000L };
+      nanosleep(&ts, NULL);
+    }
+    if (atomic_load(&p->abort)) goto done;
+  }
 
   vi = p_av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
   ai = p_av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, vi, NULL, 0);
@@ -314,6 +341,8 @@ static void reset_buffers(player *p)
   p->has_audio = p->has_video = 0;
   p->first_vpts = NAN;
   p->err[0] = '\0';
+  p->attempt_err[0] = '\0';
+  atomic_store(&p->attempt, 0);
   memset(&p->info, 0, sizeof(p->info));
 }
 
@@ -351,6 +380,14 @@ void player_close(player *p)
 player_state player_get_state(player *p) { return (player_state)atomic_load(&p->state); }
 const char *player_error(player *p) { return p->err; }
 double player_tuning_seconds(player *p) { return now_mono() - p->open_time; }
+
+int player_attempt(player *p, char *why, size_t n)
+{
+  pthread_mutex_lock(&p->mu);
+  if (why && n) snprintf(why, n, "%s", p->attempt_err);
+  pthread_mutex_unlock(&p->mu);
+  return atomic_load(&p->attempt);
+}
 
 void player_get_info(player *p, player_info *info)
 {
