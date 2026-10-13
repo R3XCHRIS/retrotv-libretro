@@ -20,13 +20,18 @@
 
 ## M2 — Options and QoL (libretro core options)
 - [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
-- [ ] Refresh: 60 / 59.94 / 50 Hz, matching PAL channels
+- [ ] Refresh: 60 / 59.94 / 50 Hz, ideally following the stream (e.g. a 50 fps PAL channel judders at 60 Hz)
 - [ ] Static style: off / classic / VHS; channel-change "blip" sound on or off
 - [ ] Banner timeout, clock 12h/24h, colour theme (Cable Navy, Teletext, Green Phosphor)
 - [ ] Sleep timer ("SLEEP 30")
 - [ ] Parental lock per group-title (PIN entered with the D-pad)
 - [ ] Audio track and subtitle selection (A long-press)
 - [ ] Preview tile in the guide (live picture of the highlighted channel)
+
+## Known issues (from Pi testing)
+- [ ] Channel change blocks `retro_run` while the old stream closes (up to ~70 ms seen): close on a background thread
+- [ ] Tuning takes 4–7 s on cold Dispatcharr channels; a warm channel can start in under 1 s
+- [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
 ## M3 — Into ReplayOS
 - [ ] Decide the integration path with the ReplayOS author (custom core hook vs. replacing `alpha_player`)

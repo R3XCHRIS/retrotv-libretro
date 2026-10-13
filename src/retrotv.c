@@ -250,7 +250,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
 
   char err[256];
   if (ffapi_load(err, sizeof(err))) { logf_(RETRO_LOG_ERROR, "FFmpeg: %s", err); return false; }
-  p_av_log_set_level(AV_LOG_ERROR);
+  p_av_log_set_level(AV_LOG_FATAL);   /* joining live streams mid-GOP logs harmless h264 errors */
   p_avformat_network_init();
 
   if (m3u_load(game->path, &chans) || chans.count == 0) {
