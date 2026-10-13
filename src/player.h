@@ -8,7 +8,9 @@
 
 #define PLAYER_W 640
 #define PLAYER_H 480
+#ifndef PLAYER_RATE
 #define PLAYER_RATE 48000          /* output audio: S16 stereo */
+#endif
 
 typedef enum {
   PLAYER_IDLE = 0,

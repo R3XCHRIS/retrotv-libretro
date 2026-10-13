@@ -10,6 +10,7 @@
 
 #include "libretro.h"
 #include "ffapi.h"
+#include "loud.h"
 #include "m3u.h"
 #include "osd.h"
 #include "player.h"
@@ -340,6 +341,7 @@ static int load_playlist(const char *src)
 static void send_audio(void)
 {
   size_t n = aframes();
+  loud_apply(abuf, n * 2, LOUD_GAIN_DB);
   audio_sent += n;
   audio_taken += audio_batch_cb(abuf, n);
   if (!audio_logged && t_now() > 10.0) {
