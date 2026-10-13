@@ -8,6 +8,34 @@
 - [x] Static and hiss while tuning, blue "NO SIGNAL" screen on errors
 - [x] Headless harness and Pi test with screenshots
 
+## M1a — Let Dispatcharr do the heavy lifting (next)
+Dispatcharr (v0.32.0 here) can already serve a channel subset and pre-transcoded
+streams through its normal M3U link. RetroTV keeps reading plain M3U + XMLTV;
+no Dispatcharr API client is needed for this.
+
+- [ ] **Channel subset:** a Dispatcharr *Channel Profile* (e.g. "RetroTV") with only the
+  channels to flip through. Its link is `/output/m3u/<profile>` and the EPG is `/output/epg/<profile>`.
+- [ ] **Crop/downscale before the Pi:** a Dispatcharr *Output Profile* (Settings → Output
+  Profiles; ffmpeg reading `pipe:0`, writing MPEG-TS to `pipe:1`), selected with
+  `?output_profile=<id>` on the M3U link. Dispatcharr then appends it to every
+  `/proxy/ts/stream/<uuid>` URL. One transcode runs per active channel and is shared by all clients.
+  Starting point (4:3 centre crop to 640x480, stereo 48 kHz AAC):
+  `-i pipe:0 -map 0:v:0 -map 0:a:0? -vf "crop='min(iw,ih*4/3)':ih,scale=640:480,setsar=1" -c:v libx264 -preset veryfast -tune zerolatency -g 50 -b:v 1500k -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
+  Also make a "fit" variant that pads instead of cropping, for channels where the sides matter.
+- [ ] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>`
+- [ ] Core: fast path when a frame is already 640x480 square-pixel (skip sws scaling; just a copy)
+- [ ] Measure on the Pi, direct versus transcoded: tune time (expect +0.5–1.5 s for ffmpeg
+  start and the first keyframe), `retro_run` and decode-thread CPU, and A/V sync
+- [ ] Try hardware encode on Yoda (VAAPI) if the CPU cost of several transcodes is too high.
+  Don't use `-fflags +discardcorrupt` (it starves the VAAPI decoder).
+- [ ] Optional: let the output profile also set the frame rate (e.g. `fps=50` for PAL) once M2's 50 Hz option exists
+
+## Later — Dispatcharr API (only where M3U/XMLTV can't help)
+- [ ] When a channel stays stuck after retries, ask Dispatcharr to reset it
+  (`POST /proxy/ts/stop/<uuid>`; its `tried_stream_ids` never clears mid-session).
+  Needs an API token stored on the Pi; never commit it.
+- [ ] Optional: live stream stats (resolution, bitrate, failover) in the info banner
+
 ## M1 — Feels like cable
 - [ ] **TV guide** (Select long-press or Start): XMLTV from the playlist's `x-tvg-url`
   (Dispatcharr `/output/epg/...`), a 90-minute grid, scrolling listings
