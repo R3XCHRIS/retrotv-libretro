@@ -1,0 +1,3 @@
+Put a private test playlist here as channels.m3u (ignored by git).
+It should contain a few real stream URLs from your IPTV server, plus one
+deliberately dead URL so the "NO SIGNAL" path gets exercised.

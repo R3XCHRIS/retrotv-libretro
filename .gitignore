@@ -1,0 +1,6 @@
+build/
+deps/
+*.o
+.DS_Store
+tests/local/*
+!tests/local/README
