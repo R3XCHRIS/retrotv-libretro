@@ -123,6 +123,9 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
 - ReplayOS launches the core with `<storage>/roms/_extra/audio_video_test.lr`. The core then finds its playlist in this order: launched
   `.m3u`, first line of the launched file, `/media/{nfs,usb,nvme,sd}/retrotv/playlist.txt`
   (first line: URL or path), then `.../retrotv/channels.m3u`. No playlist → help screen.
+- State: the last channel is saved in the frontend's save directory, which ReplayOS sets to
+  `<storage>/saves/<system>/` (now `saves/avtest/retrotv-last-<playlist hash>.txt`). Moving
+  slots means one fresh start. The EPG comes from the playlist's `x-tvg-url`.
 - Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
   and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
   `/media/sd/captures/<system>/`. `get_info` reports the display refresh (50/60 Hz).
