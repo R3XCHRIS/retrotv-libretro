@@ -88,6 +88,17 @@ static double toast_until;
 static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
+static int qm_open, qm_sel;          /* quick menu (X) */
+enum { QM_SLEEP, QM_AUDIO, QM_ZOOM, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
+static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
+static int sleep_warned;             /* "SLEEP 1" shown */
+static int asleep;                   /* switched off by the sleep timer: black, silent, no stream */
+#define SLEEP_FADE 5.0               /* seconds of fade before switching off */
+#ifndef SLEEP_UNIT
+#define SLEEP_UNIT 60.0              /* seconds per sleep-timer minute (tests build with 1) */
+#endif
+static const int SLEEP_STEPS[] = { 0, 15, 30, 60, 90 };
 static guide_view gv;
 static size_t list_cursor;
 static uint16_t pad_prev;
@@ -278,7 +289,7 @@ static void draw_banner(osd_surface *s, player_state st)
   int maxc = (right - nx) / 8;                       /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
   osd_text(s, nx, y, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : TH->muted);
-  if (opts.hints) osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  SEL LIST  START GUIDE", 1, TH->muted);
+  if (opts.hints) osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  X MENU  START GUIDE", 1, TH->muted);
 }
 
 static void draw_list(osd_surface *s)
@@ -355,11 +366,12 @@ static void draw_welcome(osd_surface *s)
   osd_text_shadow(s, x + 24, y + 18, "WELCOME TO RETROTV", 2, TH->title);
   static const char *rows[][2] = {
     { "UP / DOWN", "change channel" }, { "A", "what's on (banner)" }, { "B", "last channel" },
-    { "Y", "zoom / fit picture" }, { "START", "TV guide" }, { "SELECT", "channel list" },
+    { "Y", "zoom / fit picture" }, { "X", "menu: sleep timer, audio, test card" }, { "START", "TV guide" },
+    { "SELECT", "channel list" },
   };
-  for (int i = 0; i < 6; i++) {
-    osd_text_shadow(s, x + 24, y + 58 + i * 34, rows[i][0], 2, TH->accent);
-    osd_text(s, x + 200, y + 62 + i * 34, rows[i][1], 1, TH->text);
+  for (int i = 0; i < 7; i++) {
+    osd_text_shadow(s, x + 24, y + 52 + i * 30, rows[i][0], 2, TH->accent);
+    osd_text(s, x + 200, y + 56 + i * 30, rows[i][1], 1, TH->text);
   }
   osd_text(s, x + 24, y + 270, "Settings: ReplayOS menu > System Settings", 1, TH->sub);
   osd_text_shadow(s, x + 24, y + 298, "Press A to start watching", 2, TH->text);
@@ -760,6 +772,110 @@ static void follow_refresh(double fps)
   logf_(RETRO_LOG_INFO, "refresh %.0f Hz -> %.0f Hz (%s, stream %.2f fps)", was, want, opts.refresh ? "locked" : "auto", stream_fps);
 }
 
+/* ---------- quick menu and sleep timer ---------- */
+
+static void set_sleep(int minutes)
+{
+  sleep_min = minutes;
+  sleep_at = minutes ? t_now() + minutes * SLEEP_UNIT : 0;
+  sleep_warned = 0;
+  char t[16];
+  if (minutes) snprintf(t, sizeof(t), "SLEEP %d", minutes);
+  else snprintf(t, sizeof(t), "SLEEP OFF");
+  show_toast(t);
+  logf_(RETRO_LOG_INFO, "sleep timer %d min", minutes);
+}
+
+static void step_sleep(int dir)
+{
+  int n = (int)(sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0])), i = 0;
+  while (i < n - 1 && SLEEP_STEPS[i] != sleep_min) i++;
+  set_sleep(SLEEP_STEPS[(i + dir + n) % n]);
+}
+
+static void set_zoom(int z)
+{
+  zoom = z;
+  player_set_zoom(pl, zoom);
+  show_toast(zoom ? "ZOOM" : "FIT");
+  if (opts.zoom_remember && !chanpref_set(&zprefs, &chans.ch[cur], zoom)) zoom_save = 1;
+}
+
+static void step_audio(int dir)
+{
+  player_info in;
+  player_get_info(pl, &in);
+  if (in.naudio < 2) return;
+  int k = (in.audio_cur + dir + in.naudio) % in.naudio;
+  char t[24];
+  snprintf(t, sizeof(t), "AUDIO %d %s", k + 1, k < 8 ? in.audio_lang[k] : "");
+  show_toast(t);
+  logf_(RETRO_LOG_INFO, "audio track %d of %d", k + 1, in.naudio);
+  player_open_track(pl, chans.ch[cur].url, k);       /* re-tune with that track */
+}
+
+static void draw_qmenu(osd_surface *s)
+{
+  int x = 40, y = 92, w = 330, rh = 34, h = 62 + QM_ROWS * rh;   /* below the OSD message */
+  osd_fill(s, x, y, w, h, TH->bg, 235);
+  osd_fill(s, x, y, w, 30, TH->accent, 255);
+  osd_text(s, x + 12, y + 8, "MENU", 2, TH->on_accent);
+  player_info in;
+  player_get_info(pl, &in);
+  for (int r = 0; r < QM_ROWS; r++) {
+    char val[32] = "";
+    int ry = y + 38 + r * rh, dim = 0;
+    const char *label = "";
+    switch (r) {
+    case QM_SLEEP:
+      label = "Sleep";
+      if (sleep_min) snprintf(val, sizeof(val), "%d min", sleep_min); else snprintf(val, sizeof(val), "Off");
+      break;
+    case QM_AUDIO:
+      label = "Audio";
+      if (in.naudio > 1) snprintf(val, sizeof(val), "%d/%d %s", in.audio_cur + 1, in.naudio, in.audio_cur < 8 ? in.audio_lang[in.audio_cur] : "");
+      else { snprintf(val, sizeof(val), "one track"); dim = 1; }
+      break;
+    case QM_ZOOM: label = "Picture"; snprintf(val, sizeof(val), "%s", zoom ? "Zoom" : "Fit"); break;
+    case QM_TESTCARD: label = "Test card"; break;
+    case QM_HELP: label = "Show controls"; break;
+    case QM_CLOSE: label = "Close"; break;
+    }
+    if (r == qm_sel) osd_fill(s, x + 4, ry - 4, w - 8, rh - 2, TH->cell_sel, 255);
+    osd_text_shadow(s, x + 14, ry + 2, label, 2, dim ? TH->muted : TH->text);
+    if (*val) {
+      char v[40];
+      snprintf(v, sizeof(v), r == qm_sel && !dim ? "< %s >" : "%s", val);
+      osd_text(s, x + w - 14 - osd_text_width(v, 1), ry + 6, v, 1, dim ? TH->muted : TH->title);
+    }
+  }
+  osd_text(s, x + 14, y + h - 16, "LEFT/RIGHT CHANGE  A SELECT  B CLOSE", 1, TH->muted);
+}
+
+/* sleep timer: warn at one minute, fade the last seconds, then switch off */
+static void sleep_tick(void)
+{
+  if (!sleep_at || asleep) return;
+  double left = sleep_at - t_now();
+  if (left <= SLEEP_UNIT && !sleep_warned) { show_toast("SLEEP 1"); sleep_warned = 1; }
+  if (left <= 0) {
+    asleep = 1;
+    sleep_at = 0;
+    sleep_min = 0;
+    qm_open = guide_open = list_open = 0;
+    player_close(pl);
+    logf_(RETRO_LOG_INFO, "sleep timer: switched off");
+  }
+}
+
+/* 1 = full picture/sound, 0 = off: the fade before the sleep timer switches off */
+static double sleep_level(void)
+{
+  if (!sleep_at) return 1.0;
+  double left = sleep_at - t_now();
+  return left >= SLEEP_FADE ? 1.0 : left <= 0 ? 0.0 : left / SLEEP_FADE;
+}
+
 /* ---------- input ---------- */
 
 static uint16_t read_pad(void)
@@ -789,9 +905,14 @@ static void handle_input(void)
 #define PAD_A B
 #define PAD_B A
 #define PAD_Y X
+#define PAD_X Y
 #define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
+  if (asleep) {                                       /* any button switches the set back on */
+    if (down) { asleep = 0; if (chans.count) tune(cur); }
+    return;
+  }
   if (testcard_on) {
-    if (FACE(PAD_A) || FACE(PAD_B) || PRESSED(START)) testcard_on = 0;
+    if (FACE(PAD_A) || FACE(PAD_B) || PRESSED(START)) { testcard_on = 0; if (chans.count) tune(cur); }
     return;
   }
   if (!chans.count) {
@@ -800,6 +921,18 @@ static void handle_input(void)
   }
   if (welcome_on) {
     if (FACE(PAD_A) || FACE(PAD_B) || PRESSED(START)) { welcome_on = 0; welcome_save = 1; }
+    return;
+  }
+  if (qm_open) {
+    if (PRESSED(UP))   qm_sel = (qm_sel + QM_ROWS - 1) % QM_ROWS;
+    if (PRESSED(DOWN)) qm_sel = (qm_sel + 1) % QM_ROWS;
+    int dir = PRESSED(LEFT) ? -1 : PRESSED(RIGHT) ? 1 : FACE(PAD_A) ? 1 : 0;
+    if (dir && qm_sel == QM_SLEEP) step_sleep(dir);
+    if (dir && qm_sel == QM_AUDIO) step_audio(dir);
+    if (dir && qm_sel == QM_ZOOM) set_zoom(!zoom);
+    if (FACE(PAD_A) && qm_sel == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
+    if (FACE(PAD_A) && qm_sel == QM_HELP) { qm_open = 0; welcome_on = 1; }
+    if ((FACE(PAD_A) && qm_sel == QM_CLOSE) || FACE(PAD_B) || FACE(PAD_X)) qm_open = 0;
     return;
   }
   if (guide_open) {
@@ -825,6 +958,7 @@ static void handle_input(void)
   if (FACE(PAD_B))     tune(prev);
   if (FACE(PAD_A))     banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
+  if (FACE(PAD_X)) { qm_open = 1; qm_sel = 0; }
   if (PRESSED(START)) {
     guide_open = 1;
     gv.sel = cur;
@@ -833,16 +967,14 @@ static void handle_input(void)
     guide_scroll(&gv, chans.count);
   }
   if (FACE(PAD_Y)) {
-    zoom = !zoom;
-    player_set_zoom(pl, zoom);
-    if (opts.zoom_remember && !chanpref_set(&zprefs, &chans.ch[cur], zoom)) zoom_save = 1;
-    show_toast(zoom ? "ZOOM" : "FIT");
+    set_zoom(!zoom);
     logf_(RETRO_LOG_INFO, "aspect %s", zoom ? "zoom" : "fit");
   }
 #undef FACE
 #undef PAD_A
 #undef PAD_B
 #undef PAD_Y
+#undef PAD_X
 #undef PRESSED
 }
 
@@ -956,6 +1088,8 @@ RETRO_API void retro_unload_game(void)
   ob_why = OB_NO_FILE;
   ob_err[0] = ob_path[0] = '\0';
   testcard_on = welcome_on = welcome_save = zoom_save = 0;
+  qm_open = asleep = sleep_min = 0;
+  sleep_at = 0;
   chanpref_free(&zprefs);
   zoom_path[0] = '\0';
   saved_idx = -1;
@@ -966,7 +1100,17 @@ RETRO_API void retro_run(void)
   input_poll_cb();
   check_options();
   handle_input();
+  sleep_tick();
 
+  if (asleep) {                                      /* switched off: black and silent */
+    memset(fb, 0, sizeof(fb));
+    memset(abuf, 0, sizeof(abuf));
+    video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+    audio_batch_cb(abuf, aframes());
+    frame_no++;
+    t_clock += 1.0 / fps_out;
+    return;
+  }
   if (testcard_on) {
     osd_surface ts = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
     char clk[12];
@@ -1052,6 +1196,7 @@ RETRO_API void retro_run(void)
 
   int show_banner = st != PLAYER_PLAYING || t_now() < banner_until;
   if (welcome_on) draw_welcome(&s);
+  else if (qm_open) draw_qmenu(&s);
   else if (guide_open) {
     pthread_mutex_lock(&guide_mu);
     guide_draw(&s, &chans, guide, &gv, cur, time(NULL));
@@ -1060,6 +1205,16 @@ RETRO_API void retro_run(void)
   else if (show_banner) draw_banner(&s, st);
 
   if (t_now() < toast_until) draw_toast(&s);
+
+  double lvl = sleep_level();                        /* fade out before the sleep timer switches off */
+  if (lvl < 1.0) {
+    uint32_t k = (uint32_t)(lvl * 256);
+    for (size_t i = 0; i < sizeof(fb) / sizeof(fb[0]); i++) {
+      uint32_t c = fb[i];
+      fb[i] = ((((c >> 16) & 0xff) * k >> 8) << 16) | ((((c >> 8) & 0xff) * k >> 8) << 8) | ((c & 0xff) * k >> 8);
+    }
+    for (size_t i = 0; i < aframes() * 2; i++) abuf[i] = (int16_t)(abuf[i] * lvl);
+  }
 
   video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
   send_audio();

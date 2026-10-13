@@ -22,9 +22,10 @@ Button names are the labels on an Xbox-style pad (ReplayOS maps pads by position
 | D-pad Down / L | Channel down |
 | A | Show info banner |
 | B | Last channel |
-| Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM) |
+| Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM), remembered per channel |
 | Select | Channel list (Up/Down, A to tune, B to close) |
 | Start | TV guide (Up/Down channel, Left/Right 30 min, A to watch, B or Start to close) |
+| X | Menu: sleep timer, audio track, Fit/Zoom, test card, show controls |
 
 ## Install on ReplayOS (borrows the A/V test slot)
 

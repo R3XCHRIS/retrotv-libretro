@@ -26,6 +26,9 @@ typedef struct {
   double fps;
   int native;          /* frames arrive at PLAYER_W x PLAYER_H square-pixel: no resize */
   int bars_top, bars_left;  /* black bars detected in the stream (pixels) */
+  int naudio;               /* audio tracks in the stream */
+  int audio_cur;            /* which one plays (0-based among the audio tracks) */
+  char audio_lang[8][8];    /* their language tags ("eng", "" if none) */
 } player_info;
 
 typedef struct {
@@ -40,6 +43,8 @@ void player_destroy(player *p);
 
 /* Start tuning a URL (returns immediately; work happens on the thread). */
 int player_open(player *p, const char *url);
+/* Same, preferring the audio_track-th audio track (0-based; -1 = the best one). */
+int player_open_track(player *p, const char *url, int audio_track);
 /* Stop and join the thread. Safe to call when idle. */
 void player_close(player *p);
 
