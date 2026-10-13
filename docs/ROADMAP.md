@@ -87,7 +87,8 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] **Number entry**: type a channel number with the D-pad ("12_" → tune after 1.5 s)
 - [ ] Tune timeout with "retrying", and automatically skip channels that keep failing (configurable)
 - [ ] **Favourites** (Start + A) and a favourites-only flip mode
-- [ ] Remember the last channel per playlist (saved in the core's save directory)
+- [x] Remember the last channel per playlist (frontend save directory, else `<storage>/retrotv/`;
+  matched by number + name, so reordering the playlist doesn't lose it; written off the main thread)
 - [ ] Channel logos in the banner (fetched and cached as PNG/JPEG, decoded with FFmpeg)
 
 ## M2 — Options and QoL (libretro core options)

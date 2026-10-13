@@ -1,6 +1,8 @@
 /* retrotv.c - RetroTV libretro core: flip through IPTV channels from an M3U
  * like a cable box. Prototype for ReplayOS (Raspberry Pi 5). */
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +12,7 @@
 
 #include "libretro.h"
 #include "ffapi.h"
+#include "lastch.h"
 #include "loud.h"
 #include "m3u.h"
 #include "osd.h"
@@ -45,6 +48,12 @@ static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
 static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
 static int audio_logged;
 static loud_state loud;            /* AGC on programme audio */
+static char store_dir[512];        /* <storage>/retrotv when playlist.txt was found there */
+static char last_path[1100];       /* where the last channel is remembered */
+static int saved_idx = -1;         /* channel index the file currently holds */
+static double played_at;           /* t_now() when the current channel started playing */
+static atomic_int saving;          /* a background write is running */
+#define REMEMBER_AFTER 5.0         /* seconds of watching before a channel counts as "last" */
 static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
 static double toast_until;
 static uint32_t noise_seed = 12345;
@@ -309,6 +318,7 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
     snprintf(buf, sizeof(buf), "%s/retrotv/playlist.txt", roots[i]);
     char *t = slurp(buf, 4096), *l = t ? first_line(t) : NULL;
     if (l) {
+      snprintf(store_dir, sizeof(store_dir), "%s/retrotv", roots[i]);
       if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
       else snprintf(out, n, "%s/retrotv/%s", roots[i], l);
       free(t);
@@ -317,7 +327,12 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
     free(t);
     snprintf(buf, sizeof(buf), "%s/retrotv/channels.m3u", roots[i]);
     FILE *f = fopen(buf, "rb");
-    if (f) { fclose(f); snprintf(out, n, "%s", buf); return 0; }
+    if (f) {
+      fclose(f);
+      snprintf(store_dir, sizeof(store_dir), "%s/retrotv", roots[i]);
+      snprintf(out, n, "%s", buf);
+      return 0;
+    }
   }
   return -1;
 }
@@ -334,6 +349,60 @@ static int load_playlist(const char *src)
   }
   if (m3u_load(src, &chans)) { snprintf(help_reason, sizeof(help_reason), "cannot read %s", src); return -1; }
   return 0;
+}
+
+/* ---------- last channel ---------- */
+
+/* <save dir>/retrotv-last-<hash>.txt; the frontend's save directory if it has
+ * one, else <storage>/retrotv (survives ReplayOS updates), else /tmp. */
+static void last_init(const char *src)
+{
+  const char *dir = NULL;
+  if (!env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || !dir || !*dir) dir = NULL;
+  if (!dir) dir = *store_dir ? store_dir : "/tmp";
+  snprintf(last_path, sizeof(last_path), "%s/retrotv-last-%08x.txt", dir, (unsigned)lastch_hash(src));
+  logf_(RETRO_LOG_INFO, "last channel file: %s", last_path);
+}
+
+static int write_file(const char *path, const char *text)
+{
+  char tmp[1200];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  FILE *f = fopen(tmp, "wb");
+  if (!f) return -1;
+  int ok = fputs(text, f) >= 0;
+  ok = (fclose(f) == 0) && ok;
+  return ok ? rename(tmp, path) : (remove(tmp), -1);
+}
+
+typedef struct { char path[1100]; char text[400]; } save_job;
+
+static void *save_main(void *arg)
+{
+  save_job *j = arg;
+  write_file(j->path, j->text);
+  free(j);
+  atomic_store(&saving, 0);
+  return NULL;
+}
+
+/* Storage may be NFS: write on a detached thread so retro_run never waits. */
+static void last_save_async(size_t idx)
+{
+  if (!*last_path || atomic_exchange(&saving, 1)) return;     /* one at a time; retry next frame */
+  save_job *j = malloc(sizeof(*j));
+  pthread_t t;
+  pthread_attr_t a;
+  int ok = 0;
+  if (j && !pthread_attr_init(&a)) {
+    snprintf(j->path, sizeof(j->path), "%s", last_path);
+    lastch_format(&chans.ch[idx], j->text, sizeof(j->text));
+    pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    ok = !pthread_create(&t, &a, save_main, j);
+    pthread_attr_destroy(&a);
+  }
+  if (!ok) { free(j); atomic_store(&saving, 0); return; }
+  saved_idx = (int)idx;
 }
 
 /* ---------- audio ---------- */
@@ -513,7 +582,13 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   cur = prev = 0;
   if (chans.count) {
     logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, src);
-    tune(0);
+    last_init(src);
+    char *t = slurp(last_path, 4096);
+    int idx = lastch_find(&chans, t);
+    free(t);
+    if (idx >= 0) logf_(RETRO_LOG_INFO, "resuming ch %s (last watched)", chans.ch[idx].number);
+    saved_idx = idx;
+    tune(idx >= 0 ? (size_t)idx : 0);
   } else {
     logf_(RETRO_LOG_WARN, "no channels: %s", help_reason);
   }
@@ -526,7 +601,13 @@ RETRO_API void retro_unload_game(void)
 {
   log_stats();
   if (pl) { player_destroy(pl); pl = NULL; }
+  for (int i = 0; i < 200 && atomic_load(&saving); i++) {      /* let a pending write finish (max 2 s) */
+    struct timespec ts = { 0, 10 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
   m3u_free(&chans);
+  last_path[0] = store_dir[0] = '\0';
+  saved_idx = -1;
 }
 
 RETRO_API void retro_run(void)
@@ -565,9 +646,13 @@ RETRO_API void retro_run(void)
     logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs (%dx%d %s %.2ffps %s%s)", chans.ch[cur].number,
           player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
     logged_playing = 1;
+    played_at = t_now();
     banner_until = t_now() + BANNER_SECONDS;     /* show what came on */
     follow_refresh(in.fps);
   }
+
+  if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
+    last_save_async(cur);
 
   osd_surface s = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
   int have = player_video(pl, fb);
