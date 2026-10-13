@@ -39,7 +39,7 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static size_t list_cursor;
 static uint16_t pad_prev;
-static int logged_playing;
+static int logged_playing, logged_error, logged_attempt;
 
 /* ---------- helpers ---------- */
 
@@ -63,7 +63,8 @@ static void tune(size_t idx)
   if (idx != cur) prev = cur;
   cur = idx;
   banner_until = t_now() + BANNER_SECONDS;
-  logged_playing = 0;
+  logged_playing = logged_error = 0;
+  logged_attempt = 1;
   logf_(RETRO_LOG_INFO, "tune ch %s \"%s\"", chans.ch[cur].number, chans.ch[cur].name);
   player_open(pl, chans.ch[cur].url);
 }
@@ -81,7 +82,7 @@ static void draw_banner(osd_surface *s, player_state st)
 {
   const m3u_channel *c = &chans.ch[cur];
   int bx = 24, by = PLAYER_H - 132, bw = PLAYER_W - 48, bh = 104;
-  osd_fill(s, bx, by, bw, bh, OSD_RGB(8, 16, 72), 238);           /* cable-box navy */
+  osd_fill(s, bx, by, bw, bh, OSD_RGB(8, 16, 72), 255);   /* solid, like a real cable box */           /* cable-box navy */
   osd_fill(s, bx, by, bw, 3, OSD_RGB(240, 200, 40), 255);          /* gold rule */
 
   char num[16], name[40], group[48], line[96];
@@ -105,7 +106,10 @@ static void draw_banner(osd_surface *s, player_state st)
   case PLAYER_CONNECTING:
   case PLAYER_BUFFERING: {
     int dots = (int)(frame_no / 20) % 4;
-    snprintf(line, sizeof(line), "TUNING%.*s%*s %.0fs", dots, "...", 3 - dots, "", player_tuning_seconds(pl));
+    int att = player_attempt(pl, NULL, 0);
+    char retry[24] = "";
+    if (att > 1) snprintf(retry, sizeof(retry), "  (retry %d)", att);
+    snprintf(line, sizeof(line), "TUNING%.*s%*s %.0fs%s", dots, "...", 3 - dots, "", player_tuning_seconds(pl), retry);
     break;
   }
   case PLAYER_ERROR: {
@@ -278,6 +282,16 @@ RETRO_API void retro_run(void)
   player_state st = player_get_state(pl);
   player_audio(pl, abuf, AFRAMES, 1.0 / FPS);
   st = player_get_state(pl);
+  char why[160];
+  int att = player_attempt(pl, why, sizeof(why));
+  if (att > logged_attempt) {
+    logf_(RETRO_LOG_WARN, "ch %s attempt %d failed (%s), retrying", chans.ch[cur].number, att - 1, why);
+    logged_attempt = att;
+  }
+  if (st == PLAYER_ERROR && !logged_error) {
+    logf_(RETRO_LOG_WARN, "ch %s NO SIGNAL after %.1fs: %s", chans.ch[cur].number, player_tuning_seconds(pl), player_error(pl));
+    logged_error = 1;
+  }
   if (st == PLAYER_PLAYING && !logged_playing) {
     logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs", chans.ch[cur].number, player_tuning_seconds(pl));
     logged_playing = 1;

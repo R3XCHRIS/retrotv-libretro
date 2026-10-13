@@ -38,6 +38,8 @@ player_state player_get_state(player *p);
 const char *player_error(player *p);          /* valid while state == PLAYER_ERROR */
 void player_get_info(player *p, player_info *info);
 double player_tuning_seconds(player *p);      /* time since player_open */
+/* Current connection attempt (1-based); why = reason the previous one failed. */
+int player_attempt(player *p, char *why, size_t n);
 
 /* Fill exactly `frames` stereo frames into out (silence when nothing to play).
  * Advances the playback clock. Call once per retro_run before player_video. */
