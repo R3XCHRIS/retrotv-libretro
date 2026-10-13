@@ -55,6 +55,9 @@ static bool env(unsigned cmd, void *data)
     return *(enum retro_pixel_format *)data == RETRO_PIXEL_FORMAT_XRGB8888;
   case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     return true;
+  case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:     /* like ReplayOS: a folder that may not exist yet */
+    *(const char **)data = "saves/harness";
+    return true;
   case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
     const struct retro_system_av_info *av = data;
     printf("  [%6.2fs] refresh %.2f -> %.2f fps\n", t_run, fps, av->timing.fps);
