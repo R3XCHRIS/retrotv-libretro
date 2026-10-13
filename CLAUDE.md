@@ -62,7 +62,10 @@ features are configured in Dispatcharr and selected through the playlist URL:
   the EPG link `/output/epg/<profile>` arrives as `x-tvg-url` in the M3U header).
 - **Output Profile** = an ffmpeg pre-transcode (`pipe:0` → MPEG-TS `pipe:1`) that crops
   and downscales to 640x480 on the server. It's selected with `?output_profile=<id>` on the
-  M3U link (exists in v0.32.0; `core.models.OutputProfile`).
+  M3U link (exists in v0.32.0; `core.models.OutputProfile`). **Not used by default:** the
+  user's Dispatcharr already transcodes every stream with a VAAPI stream profile, so this
+  would be a second transcode (slower tunes). The deployed playlist is the direct link.
+  A wrong or inactive id silently falls back to passthrough: verify with ffprobe.
 - Use the Dispatcharr REST API only for things the M3U can't do (e.g. resetting a stuck
   channel), and only behind a token kept out of the repo.
 

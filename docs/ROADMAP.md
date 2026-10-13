@@ -13,6 +13,13 @@ Dispatcharr (v0.32.0 here) can already serve a channel subset and pre-transcoded
 streams through its normal M3U link. RetroTV keeps reading plain M3U + XMLTV;
 no Dispatcharr API client is needed for this.
 
+**Outcome (Oct 2026): the direct playlist (`/output/m3u/<profile>`, no output profile) is the
+default.** This Dispatcharr already runs every stream through a VAAPI *stream* profile, so an
+output profile would be a second transcode in a row: slower tuning, lower quality, more load
+on the server. The Pi handles the original streams fine (about 27% of one core, no drops), and
+zoom, 50 Hz and loudness are done in the core. The output profiles below stay documented as an
+option for servers that pass streams through untouched or for a weaker client.
+
 - [x] **Channel subset:** a Dispatcharr *Channel Profile* (e.g. "RetroTV") with only the
   channels to flip through. Its link is `/output/m3u/<profile>` and the EPG is `/output/epg/<profile>`.
 - [x] **Crop/downscale before the Pi:** a Dispatcharr *Output Profile* (Settings → Output
@@ -28,11 +35,12 @@ no Dispatcharr API client is needed for this.
   - The first `scale=...*sar` makes pixels square before cropping. Without it, anamorphic
     sources (seen: 1280x720 with SAR 405:539, a 4:3 picture) get cropped in storage pixels and come out stretched.
   - Sources seen: 1920x1080/1280x720/960x720/640x480/640x464/1920x824, 23.976–50 fps, mostly AC-3 5.1 (one 44.1 kHz).
-- [x] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>` (deployed Oct 2026 with the VAAPI fit profile)
+- [x] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>` works (tested with the VAAPI fit profile),
+  but the deployed playlist is the direct link (see Outcome above)
 - [x] Core: fast path when a frame is already 640x480 square-pixel (no resize, no border clear; the
   YUV->RGB conversion still runs because decoders output YUV)
 - [x] Measure on the Pi, direct versus transcoded (Oct 2026, below)
-- [x] Hardware encode on Yoda (VAAPI): now the default profile, see the measurements below.
+- [x] Hardware encode on Yoda (VAAPI): the cheapest output profile if one is used, see the measurements below.
   Don't use `-fflags +discardcorrupt` (it starves the VAAPI decoder).
 - [x] ~~Let the output profile set the frame rate~~ — not needed: the core now switches the output to 50 Hz itself
 
@@ -42,7 +50,7 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 `scripts/cpu-summary.py`, % of one core, the Pi 5 has 400%). Sources: 640x480p24 AAC,
 1080p25 AC-3 5.1, 1280x720p24 anamorphic AC-3, 1080p50 AC-3, 720p25 AC-3. Transcoded = output profile "fit" (libx264).
 
-| | Direct | Fit, libx264 | Fit, VAAPI (default) |
+| | Direct (default) | Fit, libx264 | Fit, VAAPI |
 |---|---|---|---|
 | Tune to picture, first visit | 2.8 / 4.0 / 5.2 / 14.6 s, one >16 s | 3.2 / 4.0 / 7.4 / 11.3 s, one >16 s | 3.3 / 4.2 / 4.8 / 12.0 / 13.9 s |
 | Tune to picture, revisit after 10–20 s | 4.0–4.3 s | 4.0–4.9 s | 4.0–5.3 s |
