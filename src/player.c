@@ -31,6 +31,7 @@ struct stream {
   int thread_live;
   atomic_int abort;
   char *url;
+  int want_audio;               /* preferred audio track (0-based), -1 = FFmpeg's best */
 
   pthread_mutex_t mu;
   pthread_cond_t cv;            /* producer waits for space */
@@ -241,6 +242,24 @@ static void *thread_main(void *arg)
 
   vi = p_av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
   ai = p_av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, vi, NULL, 0);
+  {                                                   /* list the audio tracks; honour a choice */
+    int na = 0, cur = 0;
+    pthread_mutex_lock(&p->mu);
+    for (unsigned i = 0; i < fmt->nb_streams; i++) {
+      if (fmt->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+      if (na == p->want_audio) ai = (int)i;
+      if ((int)i == ai) cur = na;
+      if (na < 8) {
+        AVDictionaryEntry *e = p_av_dict_get(fmt->streams[i]->metadata, "language", NULL, 0);
+        snprintf(p->info.audio_lang[na], sizeof(p->info.audio_lang[na]), "%s", e && e->value ? e->value : "");
+      }
+      na++;
+    }
+    if (p->want_audio >= 0 && p->want_audio < na) cur = p->want_audio;
+    p->info.naudio = na;
+    p->info.audio_cur = cur;
+    pthread_mutex_unlock(&p->mu);
+  }
   if (vi < 0 && ai < 0) { set_error(p, "no audio or video in stream", 0); goto done; }
 
   if (vi >= 0) {
@@ -419,8 +438,9 @@ static void reset_buffers(stream *p)
   p->vframes = 0;
 }
 
-static int stream_open(stream *p, const char *url)
+static int stream_open(stream *p, const char *url, int want_audio)
 {
+  p->want_audio = want_audio;
   free(p->url);
   p->url = strdup(url);
   if (!p->url) return -1;
@@ -645,13 +665,15 @@ void player_destroy(player *pl)
   free(pl);
 }
 
-int player_open(player *pl, const char *url)
+int player_open_track(player *pl, const char *url, int audio_track)
 {
   retire(pl, pl->cur);
   pl->cur = stream_create(&pl->zoom, &pl->margin);
   if (!pl->cur) return -1;
-  return stream_open(pl->cur, url);
+  return stream_open(pl->cur, url, audio_track);
 }
+
+int player_open(player *pl, const char *url) { return player_open_track(pl, url, -1); }
 
 void player_close(player *pl)
 {

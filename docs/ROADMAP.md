@@ -104,10 +104,10 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] Core options (ReplayOS: System Settings): banner timeout, 12/24 h clock, button hints, volume leveller
   Normal/Loud/Off, tuning static volume, colour theme (Cable Navy / Teletext / Green Phosphor),
   tuning picture (classic snow / VHS), channel-change click
-- [ ] Sleep timer ("SLEEP 30")
-- [ ] Parental lock per group-title (PIN entered with the D-pad)
-- [ ] Audio track and subtitle selection (A long-press)
-- [ ] Preview tile in the guide (live picture of the highlighted channel)
+- [x] Quick menu (X): sleep timer 15/30/60/90 min ("SLEEP 30", "SLEEP 1" warning, 5 s fade, then off until
+  any button), audio track, Fit/Zoom, test card, show controls
+- [x] Audio track choice in the quick menu (re-tunes with the chosen track; subtitles not planned)
+- [ ] ~~Preview of the highlighted channel in the guide~~ not planned (needs a second stream); the guide previews the current one
 
 ### Onboarding (M2)
 - [x] Setup screen when there are no channels: the problem in plain words (404, refused, timeout, not an
