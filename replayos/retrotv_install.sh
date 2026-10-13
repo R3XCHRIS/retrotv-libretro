@@ -41,8 +41,9 @@ SRC=$STORAGE/retrotv/retrotv_libretro.so
 say "core: $SRC"
 
 mkdir -p "$STORAGE/retrotv/backup"
-[[ -f "$STORAGE/retrotv/backup/cores.cfg.original" ]] || cp -p "$CFG" "$STORAGE/retrotv/backup/cores.cfg.original"
-cp -p "$CFG" "$STORAGE/retrotv/backup/cores.cfg.$NOW"
+# plain cp: NFS shares usually squash root, so ownership can't be preserved there
+[[ -f "$STORAGE/retrotv/backup/cores.cfg.original" ]] || cp "$CFG" "$STORAGE/retrotv/backup/cores.cfg.original"
+cp "$CFG" "$STORAGE/retrotv/backup/cores.cfg.$NOW"
 [[ -f "$CFG.pre-retrotv" ]] || cp -p "$CFG" "$CFG.pre-retrotv"
 say "backed up cores.cfg"
 
@@ -58,7 +59,7 @@ awk -v slot="[$SLOT]" '
 cat "$tmp" >"$CFG"
 rm -f "$tmp"
 n=$(awk -v slot="[$SLOT]" '/^\[/{insec=($0==slot)} insec && /retrotv_libretro\.so/' "$CFG" | wc -l)
-[[ $n -eq 3 ]] || { cp -p "$STORAGE/retrotv/backup/cores.cfg.$NOW" "$CFG"; die "cores.cfg edit failed - restored backup"; }
+[[ $n -eq 3 ]] || { cat "$STORAGE/retrotv/backup/cores.cfg.$NOW" >"$CFG"; die "cores.cfg edit failed - restored backup"; }
 say "[$SLOT] now launches RetroTV"
 
 [[ -f "$STORAGE/retrotv/playlist.txt" ]] || say "NOTE: add your M3U URL to $STORAGE/retrotv/playlist.txt"
