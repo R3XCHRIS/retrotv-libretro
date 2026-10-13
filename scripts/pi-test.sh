@@ -3,6 +3,9 @@
 #
 #   PI=root@192.168.100.169 PLAYLIST=tests/local/channels.m3u scripts/pi-test.sh
 #
+# SCRIPT button names are libretro ids (harness): pad A = "b", pad B = "a",
+# pad Y = "x", pad X = "y".
+#
 # Writes screenshots, the run log (run.log) and per-thread CPU samples
 # (cpu.txt, read by scripts/cpu-summary.py) to $OUT.
 #
@@ -13,7 +16,7 @@ cd "$(dirname "$0")/.."
 PI="${PI:-root@192.168.100.169}"
 PLAYLIST="${PLAYLIST:-tests/local/channels.m3u}"
 SECONDS_TO_RUN="${SECONDS_TO_RUN:-60}"
-SCRIPT="${SCRIPT:-shot@8 up@10 shot@20 up@24 shot@34 up@36 shot@44 b@46 shot@52 select@54 shot@55 b@56 a@57 shot@58}"
+SCRIPT="${SCRIPT:-shot@8 up@10 shot@20 up@24 shot@34 up@36 shot@44 a@46 shot@52 select@54 shot@55 a@56 b@57 shot@58}"
 REMOTE=/tmp/retrotv-test
 OUT="${OUT:-build/pi-shots}"
 

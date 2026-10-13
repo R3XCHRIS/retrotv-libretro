@@ -41,6 +41,8 @@ static double fps_out = 60.0;      /* current refresh */
 static double t_clock;             /* seconds of output since load */
 static int refresh_refused;        /* frontend said no to SET_SYSTEM_AV_INFO */
 static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
+static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
+static int audio_logged;
 static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
 static double toast_until;
 static uint32_t noise_seed = 12345;
@@ -164,7 +166,7 @@ static void draw_banner(osd_surface *s, player_state st)
   int maxc = (bx + bw - 14 - nx) / 8;                 /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
   osd_text(s, nx, by + 66, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
-  osd_text(s, nx, by + 82, "UP/DN CH  B LAST  A INFO  SELECT LIST  Y ZOOM", 1, OSD_RGB(130, 130, 160));
+  osd_text(s, nx, by + 82, "UP/DN CH  A INFO  B LAST  Y ZOOM  SELECT LIST", 1, OSD_RGB(130, 130, 160));
 }
 
 static void draw_list(osd_surface *s)
@@ -330,6 +332,27 @@ static int load_playlist(const char *src)
   return 0;
 }
 
+/* ---------- audio ---------- */
+
+/* Hand this run's audio to the frontend; once, after 10 s, log how much it
+ * took and whether it reports audio as enabled (diagnostics for frontends
+ * that stay silent). */
+static void send_audio(void)
+{
+  size_t n = aframes();
+  audio_sent += n;
+  audio_taken += audio_batch_cb(abuf, n);
+  if (!audio_logged && t_now() > 10.0) {
+    int av = -1;
+    if (!env_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av)) av = -1;
+    int peak = 0;
+    for (size_t i = 0; i < n * 2; i++) if (abs(abuf[i]) > peak) peak = abs(abuf[i]);
+    logf_(RETRO_LOG_INFO, "audio: frontend took %llu of %llu frames; av_enable=%d (2 = audio on, 8 = hard-disabled, -1 = not supported); last peak %d",
+          (unsigned long long)audio_taken, (unsigned long long)audio_sent, av, peak);
+    audio_logged = 1;
+  }
+}
+
 /* ---------- refresh and aspect ---------- */
 
 static void draw_toast(osd_surface *s)
@@ -370,7 +393,8 @@ static uint16_t read_pad(void)
   static const unsigned ids[] = {
     RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_A,
     RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L,
-    RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_Y,
+    RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_X,
+    RETRO_DEVICE_ID_JOYPAD_Y,
   };
   for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
     if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, ids[i])) m |= (uint16_t)(1u << ids[i]);
@@ -383,25 +407,36 @@ static void handle_input(void)
   uint16_t down = pad & (uint16_t)~pad_prev;
   pad_prev = pad;
 #define PRESSED(id) (down & (1u << RETRO_DEVICE_ID_JOYPAD_##id))
+/* Face buttons by the label on an Xbox-style pad. ReplayOS maps pads by
+ * position (libretro's SNES layout), so the bottom button "A" arrives as
+ * JOYPAD_B, right "B" as JOYPAD_A, left "X" as JOYPAD_Y and top "Y" as JOYPAD_X. */
+#define PAD_A B
+#define PAD_B A
+#define PAD_Y X
+#define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
   if (!chans.count) return;
   if (list_open) {
     if (PRESSED(UP))   list_cursor = list_cursor ? list_cursor - 1 : chans.count - 1;
     if (PRESSED(DOWN)) list_cursor = (list_cursor + 1) % chans.count;
-    if (PRESSED(A))    { list_open = 0; tune(list_cursor); }
-    if (PRESSED(B) || PRESSED(SELECT)) list_open = 0;
+    if (FACE(PAD_A))   { list_open = 0; tune(list_cursor); }
+    if (FACE(PAD_B) || PRESSED(SELECT)) list_open = 0;
     return;
   }
   if (PRESSED(UP) || PRESSED(R))   tune((cur + 1) % chans.count);
   if (PRESSED(DOWN) || PRESSED(L)) tune(cur ? cur - 1 : chans.count - 1);
-  if (PRESSED(B))      tune(prev);
-  if (PRESSED(A))      banner_until = t_now() + BANNER_SECONDS;
+  if (FACE(PAD_B))     tune(prev);
+  if (FACE(PAD_A))     banner_until = t_now() + BANNER_SECONDS;
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
-  if (PRESSED(Y)) {
+  if (FACE(PAD_Y)) {
     zoom = !zoom;
     player_set_zoom(pl, zoom);
     show_toast(zoom ? "ZOOM" : "FIT");
     logf_(RETRO_LOG_INFO, "aspect %s", zoom ? "zoom" : "fit");
   }
+#undef FACE
+#undef PAD_A
+#undef PAD_B
+#undef PAD_Y
 #undef PRESSED
 }
 
@@ -550,7 +585,7 @@ RETRO_API void retro_run(void)
   if (t_now() < toast_until) draw_toast(&s);
 
   video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
-  audio_batch_cb(abuf, aframes());
+  send_audio();
   frame_no++;
   t_clock += 1.0 / fps_out;
 }
