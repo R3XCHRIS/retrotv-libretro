@@ -46,6 +46,15 @@ time_t epg_time(const char *s)
   return (time_t)t;
 }
 
+void epg_clock(time_t t, int h24, int ampm, char *out, size_t n)
+{
+  struct tm tmv;
+  localtime_r(&t, &tmv);
+  if (h24) { snprintf(out, n, "%02d:%02d", tmv.tm_hour, tmv.tm_min); return; }
+  int h = tmv.tm_hour % 12 ? tmv.tm_hour % 12 : 12;
+  snprintf(out, n, "%d:%02d%s", h, tmv.tm_min, ampm ? (tmv.tm_hour < 12 ? "am" : "pm") : "");
+}
+
 /* ---------- text ---------- */
 
 static void put_utf8(char **o, char *end, unsigned long cp)

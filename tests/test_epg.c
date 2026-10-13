@@ -1,5 +1,6 @@
 /* Host unit tests for the XMLTV guide parser. Build: make test */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../src/epg.h"
@@ -29,6 +30,18 @@ static const char *XML =
 
 int main(void)
 {
+  setenv("TZ", "UTC", 1);                                  /* clock text is local time */
+  tzset();
+  char ck[16];
+  epg_clock(epg_time("20261013204000 +0000"), 1, 1, ck, sizeof(ck));
+  CHECK(!strcmp(ck, "20:40"));
+  epg_clock(epg_time("20261013204000 +0000"), 0, 1, ck, sizeof(ck));
+  CHECK(!strcmp(ck, "8:40pm"));
+  epg_clock(epg_time("20261013000500 +0000"), 0, 0, ck, sizeof(ck));
+  CHECK(!strcmp(ck, "12:05"));                             /* midnight is 12, not 0 */
+  epg_clock(epg_time("20261013091500 +0000"), 0, 1, ck, sizeof(ck));
+  CHECK(!strcmp(ck, "9:15am"));
+
   /* times: reference values from Python's calendar.timegm */
   time_t t0 = epg_time("20261013190635 +0000");
   CHECK(t0 == 1791918395);
