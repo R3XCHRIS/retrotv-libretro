@@ -285,7 +285,16 @@ int main(int argc, char **argv)
     due.tv_sec += (time_t)target;
     due.tv_nsec += (long)((target - floor(target)) * 1e9);
     if (due.tv_nsec >= 1000000000L) { due.tv_sec++; due.tv_nsec -= 1000000000L; }
+#ifdef TIMER_ABSTIME
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &due, NULL);
+#else /* macOS: no clock_nanosleep; sleep the remainder (host `make check` only) */
+    struct timespec now, rem;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    rem.tv_sec = due.tv_sec - now.tv_sec;
+    rem.tv_nsec = due.tv_nsec - now.tv_nsec;
+    if (rem.tv_nsec < 0) { rem.tv_sec--; rem.tv_nsec += 1000000000L; }
+    if (rem.tv_sec >= 0) nanosleep(&rem, NULL);
+#endif
   }
   retro_unload_game();
   retro_deinit();
