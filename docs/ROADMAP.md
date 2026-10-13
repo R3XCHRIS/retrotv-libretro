@@ -107,6 +107,14 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [ ] Audio track and subtitle selection (A long-press)
 - [ ] Preview tile in the guide (live picture of the highlighted channel)
 
+### Onboarding (M2)
+- [x] Setup screen when there are no channels: the problem in plain words (404, refused, timeout, not an
+  M3U, empty playlist.txt, ...), a hint, the exact playlist.txt path on the mounted storage, an example link
+- [x] Built-in test card (A on the setup screen): colour bars, clock, 1 kHz tone at -18 dBFS walking
+  left / right / both, to check picture, sound and stereo before any IPTV setup
+- [x] One-time welcome screen with the controls (remembered next to the last-channel file)
+- [x] Installer creates a commented `retrotv/playlist.txt` template when there is none
+
 ## Known issues (from Pi testing)
 - [x] Channel change blocked `retro_run` while the old stream closed (up to ~99 ms seen): now closed on a
   background reaper thread; 20 channel changes in 10 s on the Pi kept `retro_run` at 6 ms or less

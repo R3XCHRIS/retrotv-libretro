@@ -18,7 +18,9 @@
 #include "guide.h"
 #include "lastch.h"
 #include "loud.h"
+#include "onboard.h"
 #include "options.h"
+#include "testcard.h"
 #include "m3u.h"
 #include "osd.h"
 #include "player.h"
@@ -85,7 +87,15 @@ static guide_view gv;
 static size_t list_cursor;
 static uint16_t pad_prev;
 static int logged_playing, logged_error, logged_attempt;
-static char help_reason[160];      /* why no channels loaded; shown on the help screen */
+static char help_reason[160];      /* why no channels loaded (for the log) */
+static ob_kind ob_why = OB_NO_FILE; /* ... and for the setup screen */
+static char ob_err[160];           /* FFmpeg's error text for OB_FETCH */
+static char ob_path[300];          /* where playlist.txt goes (or is) */
+static int testcard_on;            /* built-in test card instead of a channel */
+static double tc_t, tc_phase;
+static int welcome_on;             /* first-run controls screen */
+static int welcome_save;           /* dismissed: write the 'seen' file (retried until it starts) */
+static char state_dir[1024];       /* where the core keeps its small files */
 
 /* ---------- helpers ---------- */
 
@@ -286,28 +296,61 @@ static void draw_no_signal(osd_surface *s)
   osd_text_shadow(s, (PLAYER_W - osd_text_width(t, 4)) / 2, 150, t, 4, OSD_RGB(255, 255, 255));
 }
 
+/* word-wrap at 1x into lines of cols characters */
+static int wrap1(osd_surface *s, int x, int y, const char *t, int cols, uint32_t rgb)
+{
+  char line[96];
+  while (*t) {
+    while (*t == ' ') t++;
+    int len = (int)strlen(t), cut = len <= cols ? len : cols;
+    if (len > cols) { int sp = cut; while (sp > 0 && t[sp] != ' ') sp--; if (sp > 0) cut = sp; }
+    if (cut > (int)sizeof(line) - 1) cut = (int)sizeof(line) - 1;
+    memcpy(line, t, (size_t)cut);
+    line[cut] = '\0';
+    osd_text(s, x, y, line, 1, rgb);
+    y += 12;
+    t += cut;
+  }
+  return y;
+}
+
+/* Setup screen when there are no channels: what's wrong, how to fix it. */
 static void draw_help(osd_surface *s)
 {
+  char problem[96], hint[256];
+  onboard_explain(ob_why, ob_err, problem, sizeof(problem), hint, sizeof(hint));
   osd_fill(s, 0, 0, PLAYER_W, PLAYER_H, OSD_RGB(6, 16, 63), 255);
-  osd_fill(s, 32, 32, PLAYER_W - 64, 40, OSD_RGB(240, 200, 40), 255);
-  osd_text(s, 48, 44, "RETROTV - NO PLAYLIST", 2, OSD_RGB(6, 16, 63));
-  static const char *lines[] = {
-    "Put your M3U playlist URL or path",
-    "on the first line of:",
-    "",
-    "  <storage>/retrotv/playlist.txt",
-    "",
-    "for example",
-    "  http://dispatcharr:9191/output/m3u",
-    "",
-    "<storage> = ReplayOS storage,",
-    "e.g. the NFS share or SD card.",
+  osd_fill(s, 32, 28, PLAYER_W - 64, 36, OSD_RGB(240, 200, 40), 255);
+  osd_text(s, 48, 38, "RETROTV - SET UP YOUR CHANNELS", 2, OSD_RGB(6, 16, 63));
+  osd_text_shadow(s, 48, 84, problem, 2, OSD_RGB(255, 140, 140));
+  int y = wrap1(s, 48, 108, hint, 68, OSD_RGB(255, 255, 255)) + 14;
+  osd_text(s, 48, y, "1. Put your playlist link on the first line of:", 1, OSD_RGB(240, 200, 40));
+  y = wrap1(s, 72, y + 16, ob_path, 65, OSD_RGB(160, 200, 255)) + 10;
+  osd_text(s, 48, y, "2. For example, from Dispatcharr:", 1, OSD_RGB(240, 200, 40));
+  osd_text(s, 72, y + 16, "http://<server-ip>:9191/output/m3u/<profile>", 1, OSD_RGB(160, 200, 255));
+  osd_text(s, 48, y + 42, "3. Close and reopen RetroTV.", 1, OSD_RGB(240, 200, 40));
+  osd_fill(s, 32, 400, PLAYER_W - 64, 2, OSD_RGB(240, 200, 40), 255);
+  osd_text(s, 48, 414, "A: TEST CARD - check picture, sound and stereo", 1, OSD_RGB(255, 255, 255));
+  osd_text(s, 48, 430, "Settings: ReplayOS menu > System Settings", 1, OSD_RGB(130, 130, 160));
+}
+
+/* First launch: the controls, once. */
+static void draw_welcome(osd_surface *s)
+{
+  int x = 64, y = 60, w = PLAYER_W - 128, h = 340;
+  osd_fill(s, x, y, w, h, OSD_RGB(8, 16, 72), 235);
+  osd_fill(s, x, y, w, 3, OSD_RGB(240, 200, 40), 255);
+  osd_text_shadow(s, x + 24, y + 18, "WELCOME TO RETROTV", 2, OSD_RGB(255, 214, 64));
+  static const char *rows[][2] = {
+    { "UP / DOWN", "change channel" }, { "A", "what's on (banner)" }, { "B", "last channel" },
+    { "Y", "zoom / fit picture" }, { "START", "TV guide" }, { "SELECT", "channel list" },
   };
-  for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++)
-    osd_text(s, 48, 100 + (int)i * 26, lines[i], 2, OSD_RGB(255, 255, 255));
-  char r[80];
-  clip_copy(r, sizeof(r), help_reason, 66);
-  osd_text(s, 48, 400, r, 1, OSD_RGB(255, 140, 140));
+  for (int i = 0; i < 6; i++) {
+    osd_text_shadow(s, x + 24, y + 58 + i * 34, rows[i][0], 2, OSD_RGB(240, 200, 40));
+    osd_text(s, x + 200, y + 62 + i * 34, rows[i][1], 1, OSD_RGB(255, 255, 255));
+  }
+  osd_text(s, x + 24, y + 270, "Settings: ReplayOS menu > System Settings", 1, OSD_RGB(160, 200, 255));
+  osd_text_shadow(s, x + 24, y + 298, "Press A to start watching", 2, OSD_RGB(255, 255, 255));
 }
 
 /* ---------- playlist lookup ---------- */
@@ -378,6 +421,7 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
   if (game_path) {
     char *t = slurp(game_path, 4096), *l = t ? first_line(t) : NULL;
     if (l) {
+      snprintf(ob_path, sizeof(ob_path), "%s", game_path);    /* the file the link came from */
       if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
       else {
         snprintf(buf, sizeof(buf), "%s", game_path);
@@ -394,8 +438,10 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
   for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
     snprintf(buf, sizeof(buf), "%s/retrotv/playlist.txt", roots[i]);
     char *t = slurp(buf, 4096), *l = t ? first_line(t) : NULL;
+    if (t && !l && ob_why != OB_EMPTY_FILE) { ob_why = OB_EMPTY_FILE; snprintf(ob_path, sizeof(ob_path), "%s", buf); }
     if (l) {
       snprintf(store_dir, sizeof(store_dir), "%s/retrotv", roots[i]);
+      snprintf(ob_path, sizeof(ob_path), "%s", buf);
       if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
       else snprintf(out, n, "%s/retrotv/%s", roots[i], l);
       free(t);
@@ -411,6 +457,15 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
       return 0;
     }
   }
+  if (ob_why != OB_EMPTY_FILE) {                     /* suggest the first mounted storage */
+    ob_why = OB_NO_FILE;
+    snprintf(ob_path, sizeof(ob_path), "<storage>/retrotv/playlist.txt");
+    for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+      struct stat st;
+      snprintf(buf, sizeof(buf), "%s/roms", roots[i]);
+      if (!stat(buf, &st) && S_ISDIR(st.st_mode)) { snprintf(ob_path, sizeof(ob_path), "%s/retrotv/playlist.txt", roots[i]); break; }
+    }
+  }
   return -1;
 }
 
@@ -419,12 +474,18 @@ static int load_playlist(const char *src)
   if (m3u_is_url(src)) {
     char err[128] = "";
     char *text = fetch_url(src, 8u << 20, NULL, err, sizeof(err));
-    if (!text) { snprintf(help_reason, sizeof(help_reason), "%s", err); return -1; }
+    if (!text) { ob_why = OB_FETCH; snprintf(ob_err, sizeof(ob_err), "%s", err); snprintf(help_reason, sizeof(help_reason), "%s", err); return -1; }
+    if (!onboard_is_m3u(text)) { ob_why = OB_NOT_M3U; snprintf(help_reason, sizeof(help_reason), "not an M3U playlist"); free(text); return -1; }
     int rc = m3u_parse(text, NULL, &chans);
     free(text);
     return rc;
   }
-  if (m3u_load(src, &chans)) { snprintf(help_reason, sizeof(help_reason), "cannot read %s", src); return -1; }
+  if (m3u_load(src, &chans)) {
+    ob_why = OB_FETCH;
+    snprintf(ob_err, sizeof(ob_err), "cannot read %s", src);
+    snprintf(help_reason, sizeof(help_reason), "cannot read %s", src);
+    return -1;
+  }
   return 0;
 }
 
@@ -511,6 +572,7 @@ static void last_init(const char *src)
   const char *dir = NULL;
   if (!env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || !dir || !*dir) dir = NULL;
   if (!dir) dir = *store_dir ? store_dir : "/tmp";
+  snprintf(state_dir, sizeof(state_dir), "%s", dir);
   snprintf(last_path, sizeof(last_path), "%s/retrotv-last-%08x.txt", dir, (unsigned)lastch_hash(src));
   logf_(RETRO_LOG_INFO, "last channel file: %s", last_path);
 }
@@ -557,23 +619,33 @@ static void *save_main(void *arg)
 }
 
 /* Storage may be NFS: write on a detached thread so retro_run never waits. */
-static void last_save_async(size_t idx)
+/* Write a small file on a detached thread (one at a time); 0 if started. */
+static int save_text_async(const char *path, const char *text)
 {
-  if (!*last_path || atomic_exchange(&saving, 1)) return;     /* one at a time; retry next frame */
+  if (!*path || atomic_exchange(&saving, 1)) return -1;       /* busy: caller retries later */
   save_job *j = malloc(sizeof(*j));
   pthread_t t;
   pthread_attr_t a;
   int ok = 0;
   if (j && !pthread_attr_init(&a)) {
-    snprintf(j->path, sizeof(j->path), "%s", last_path);
-    lastch_format(&chans.ch[idx], j->text, sizeof(j->text));
+    snprintf(j->path, sizeof(j->path), "%s", path);
+    snprintf(j->text, sizeof(j->text), "%s", text);
     pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
     ok = !pthread_create(&t, &a, save_main, j);
     pthread_attr_destroy(&a);
   }
-  if (!ok) { free(j); atomic_store(&saving, 0); return; }
-  saved_idx = (int)idx;
+  if (!ok) { free(j); atomic_store(&saving, 0); return -1; }
+  return 0;
 }
+
+static void last_save_async(size_t idx)
+{
+  char text[400];
+  lastch_format(&chans.ch[idx], text, sizeof(text));
+  if (!save_text_async(last_path, text)) saved_idx = (int)idx;
+}
+
+static void welcome_path(char *out, size_t n) { snprintf(out, n, "%s/retrotv-welcome.txt", state_dir); }
 
 /* ---------- audio ---------- */
 
@@ -680,7 +752,18 @@ static void handle_input(void)
 #define PAD_B A
 #define PAD_Y X
 #define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
-  if (!chans.count) return;
+  if (testcard_on) {
+    if (FACE(PAD_A) || FACE(PAD_B) || PRESSED(START)) testcard_on = 0;
+    return;
+  }
+  if (!chans.count) {
+    if (FACE(PAD_A)) { testcard_on = 1; tc_t = 0; }
+    return;
+  }
+  if (welcome_on) {
+    if (FACE(PAD_A) || FACE(PAD_B) || PRESSED(START)) { welcome_on = 0; welcome_save = 1; }
+    return;
+  }
   if (guide_open) {
     time_t now = time(NULL), first = guide_slot(now) - GUIDE_STEP, last = now + 24 * 3600;
     if (PRESSED(UP))    gv.sel = gv.sel ? gv.sel - 1 : chans.count - 1;
@@ -790,6 +873,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     snprintf(help_reason, sizeof(help_reason), "no playlist.txt found");
   } else if (load_playlist(src) == 0 && chans.count == 0) {
     snprintf(help_reason, sizeof(help_reason), "playlist has no channels: %.100s", src);
+    ob_why = OB_NO_CHANNELS;
+    if (!*ob_path) snprintf(ob_path, sizeof(ob_path), "%s", src);
   }
   pl = player_create();
   if (!pl) { m3u_free(&chans); return false; }
@@ -802,6 +887,11 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     int idx = lastch_find(&chans, t);
     free(t);
     if (idx >= 0) logf_(RETRO_LOG_INFO, "resuming ch %s (last watched)", chans.ch[idx].number);
+    char wp[1100];
+    welcome_path(wp, sizeof(wp));
+    char *seen = slurp(wp, 64);
+    welcome_on = !seen;
+    free(seen);
     saved_idx = idx;
     tune(idx >= 0 ? (size_t)idx : 0);
   } else {
@@ -822,7 +912,10 @@ RETRO_API void retro_unload_game(void)
     nanosleep(&ts, NULL);
   }
   m3u_free(&chans);
-  last_path[0] = store_dir[0] = '\0';
+  last_path[0] = store_dir[0] = state_dir[0] = '\0';
+  ob_why = OB_NO_FILE;
+  ob_err[0] = ob_path[0] = '\0';
+  testcard_on = welcome_on = welcome_save = 0;
   saved_idx = -1;
 }
 
@@ -832,6 +925,19 @@ RETRO_API void retro_run(void)
   check_options();
   handle_input();
 
+  if (testcard_on) {
+    osd_surface ts = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
+    char clk[12];
+    epg_clock(time(NULL), opts.clock24, 1, clk, sizeof(clk));
+    testcard_draw(&ts, testcard_side(tc_t), clk);
+    testcard_audio(abuf, aframes(), PLAYER_RATE, tc_t, &tc_phase);
+    video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+    audio_batch_cb(abuf, aframes());
+    tc_t += 1.0 / fps_out;
+    frame_no++;
+    t_clock += 1.0 / fps_out;
+    return;
+  }
   if (!chans.count) {
     osd_surface hs = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
     draw_help(&hs);
@@ -874,6 +980,11 @@ RETRO_API void retro_run(void)
     logf_(RETRO_LOG_INFO, "%s", guide_msg);
     atomic_store(&guide_msg_ready, 0);
   }
+  if (welcome_save) {
+    char wp[1100];
+    welcome_path(wp, sizeof(wp));
+    if (!save_text_async(wp, "seen=1\n")) welcome_save = 0;
+  }
   if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
     last_save_async(cur);
 
@@ -892,7 +1003,8 @@ RETRO_API void retro_run(void)
   }
 
   int show_banner = st != PLAYER_PLAYING || t_now() < banner_until;
-  if (guide_open) {
+  if (welcome_on) draw_welcome(&s);
+  else if (guide_open) {
     pthread_mutex_lock(&guide_mu);
     guide_draw(&s, &chans, guide, &gv, cur, time(NULL));
     pthread_mutex_unlock(&guide_mu);
