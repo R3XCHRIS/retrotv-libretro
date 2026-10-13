@@ -12,6 +12,9 @@ typedef struct {
   int leveller;            /* 0 off, 1 normal, 2 loud */
   int static_vol;          /* tuning hiss: 0 off, 1 quiet, 2 normal */
   int hints;               /* button hints on the banner */
+  int theme;               /* THEME_NAVY, THEME_TELETEXT, THEME_PHOSPHOR */
+  int static_vhs;          /* tuning picture: 0 classic snow, 1 VHS */
+  int blip;                /* channel-change sound */
 } rtv_options;
 
 /* Defaults, as declared in the table. */

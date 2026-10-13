@@ -55,6 +55,21 @@ static bool env(unsigned cmd, void *data)
     return *(enum retro_pixel_format *)data == RETRO_PIXEL_FORMAT_XRGB8888;
   case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     return true;
+  case RETRO_ENVIRONMENT_GET_VARIABLE: {       /* HARNESS_OPTS="retrotv_theme=teletext,retrotv_clock=12" */
+    struct retro_variable *v = data;
+    static char val[128];
+    const char *all = getenv("HARNESS_OPTS");
+    size_t kl = strlen(v->key);
+    for (const char *p = all; p && *p; p = strchr(p, ','), p = p ? p + 1 : NULL) {
+      if (strncmp(p, v->key, kl) || p[kl] != '=') continue;
+      const char *e = strchr(p + kl + 1, ',');
+      size_t n = e ? (size_t)(e - p - kl - 1) : strlen(p + kl + 1);
+      snprintf(val, sizeof(val), "%.*s", (int)n, p + kl + 1);
+      v->value = val;
+      return true;
+    }
+    return false;
+  }
   case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:     /* like ReplayOS: a folder that may not exist yet */
     *(const char **)data = "saves/harness";
     return true;

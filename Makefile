@@ -13,7 +13,7 @@ FFINC   := deps/ffmpeg
 
 WARN    := -Wall -Wextra -Wno-unused-parameter
 CFLAGS  := -std=gnu11 -O2 -g $(WARN) -fPIC -fvisibility=hidden -Iinclude -I$(FFINC)
-SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/loud.c src/lastch.c src/epg.c src/guide.c src/options.c src/onboard.c src/testcard.c src/ffapi.c
+SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/loud.c src/lastch.c src/epg.c src/guide.c src/options.c src/onboard.c src/testcard.c src/theme.c src/ffapi.c
 
 all: build/retrotv_libretro.so build/harness
 
@@ -21,7 +21,7 @@ deps: $(FFINC)/.tag
 $(FFINC)/.tag:
 	scripts/fetch-deps.sh
 
-build/retrotv_libretro.so: $(SRCS) src/*.h $(FFINC)/.tag | build
+build/retrotv_libretro.so: $(SRCS) src/*.h Makefile $(FFINC)/.tag | build
 	$(ZIG) cc -target $(TARGET) $(CFLAGS) -shared -o $@ $(SRCS) -ldl -lpthread -lm
 
 build/harness: tests/harness.c | build
@@ -42,7 +42,7 @@ test: | build
 	build/test_loud
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_epg tests/test_epg.c src/epg.c
 	build/test_lastch
-	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_guide tests/test_guide.c src/guide.c src/epg.c src/osd.c src/m3u.c
+	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_guide tests/test_guide.c src/guide.c src/epg.c src/osd.c src/m3u.c src/theme.c
 	build/test_epg
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -Iinclude -fsanitize=address,undefined -o build/test_options tests/test_options.c src/options.c
 	build/test_guide

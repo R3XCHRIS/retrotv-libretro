@@ -38,11 +38,14 @@ int main(void)
   rtv_options o;
   options_defaults(&o);
   CHECK(o.banner_secs == 4 && o.clock24 && o.hints && o.leveller == 1 && o.static_vol == 2);
+  CHECK(o.theme == 0 && !o.static_vhs && !o.blip);
 
   const char *kv[] = { "retrotv_banner_timeout", "0", "retrotv_clock", "12", "retrotv_leveller", "loud",
-                       "retrotv_static_sound", "off", "retrotv_hints", "off", NULL };
+                       "retrotv_static_sound", "off", "retrotv_hints", "off", "retrotv_theme", "phosphor",
+                       "retrotv_static_style", "vhs", "retrotv_blip", "on", NULL };
   options_parse(&o, map_get, kv);
   CHECK(o.banner_secs == 0 && !o.clock24 && o.leveller == 2 && o.static_vol == 0 && !o.hints);
+  CHECK(o.theme == 2 && o.static_vhs && o.blip);
 
   const char *bad[] = { "retrotv_banner_timeout", "99", "retrotv_leveller", "LOUD", NULL };
   options_parse(&o, map_get, bad);                    /* not a listed choice: default */
@@ -66,6 +69,7 @@ int main(void)
   fe_version = 0;                                     /* old frontend: "Desc; default|others" */
   CHECK(options_register(fake_env) == 1);
   CHECK(got_v0 && !strcmp(got_v0[1].key, "retrotv_clock") && !strcmp(got_v0[1].value, "Clock; 24|12"));
+  CHECK(!strcmp(got_v0[3].value, "Colour theme; navy|teletext|phosphor"));
   CHECK(got_v0[options_count()].key == NULL);
 
   options_read(&o, fake_env);                         /* reads through GET_VARIABLE */

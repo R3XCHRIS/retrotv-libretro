@@ -28,6 +28,15 @@ static const opt_def OPTS[] = {
   { "retrotv_hints", "Button hints",
     "Show the button hints line on the banner.",
     "interface", "on", { { "on", "On" }, { "off", "Off" } } },
+  { "retrotv_theme", "Colour theme",
+    "Colours of the banner, channel list and guide.",
+    "interface", "navy", { { "navy", "Cable Navy" }, { "teletext", "Teletext" }, { "phosphor", "Green Phosphor" } } },
+  { "retrotv_static_style", "Tuning picture",
+    "What you see while a channel tunes.",
+    "interface", "classic", { { "classic", "Classic snow" }, { "vhs", "VHS" } } },
+  { "retrotv_blip", "Channel-change sound",
+    "A short click when you change channel, like an old TV.",
+    "sound", "off", { { "off", "Off" }, { "on", "On" } } },
   { "retrotv_leveller", "Volume leveller",
     "Evens out loud and quiet channels. Loud aims higher, closer to game volume.",
     "sound", "normal", { { "normal", "Normal" }, { "loud", "Loud" }, { "off", "Off" } } },
@@ -69,6 +78,10 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   o->leveller = !strcmp(l, "off") ? 0 : !strcmp(l, "loud") ? 2 : 1;
   const char *s = val("retrotv_static_sound", get, ctx);
   o->static_vol = !strcmp(s, "off") ? 0 : !strcmp(s, "quiet") ? 1 : 2;
+  const char *t = val("retrotv_theme", get, ctx);
+  o->theme = !strcmp(t, "teletext") ? 1 : !strcmp(t, "phosphor") ? 2 : 0;
+  o->static_vhs = !strcmp(val("retrotv_static_style", get, ctx), "vhs");
+  o->blip = !strcmp(val("retrotv_blip", get, ctx), "on");
 }
 
 void options_defaults(rtv_options *o) { options_parse(o, NULL, NULL); }

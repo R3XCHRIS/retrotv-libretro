@@ -1,4 +1,5 @@
 #include "guide.h"
+#include "theme.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,13 +17,14 @@
 #define GX (L + CH_W + 4)          /* grid */
 #define GW (R - GX)
 
-#define NAVY OSD_RGB(8, 16, 72)
-#define GOLD OSD_RGB(240, 200, 40)
-#define CELL OSD_RGB(28, 44, 120)
-#define CELL_SEL OSD_RGB(50, 96, 200)
-#define WHITE OSD_RGB(255, 255, 255)
-#define DIM OSD_RGB(160, 180, 230)
-#define YELLOW OSD_RGB(255, 214, 64)
+#define NAVY TH->on_accent         /* text on accent fills (ruler, focused cell) */
+#define BG TH->bg
+#define GOLD TH->accent
+#define CELL TH->cell
+#define CELL_SEL TH->cell_sel
+#define WHITE TH->text
+#define DIM TH->sub
+#define YELLOW TH->title
 
 int guide_cells(const epg_chan *c, time_t t0, time_t span, int x0, int w, guide_cell *out, int max)
 {
@@ -109,7 +111,7 @@ static void draw_preview(osd_surface *s)
   for (int y = 0; y < PV_H; y++)
     for (int x = 0; x < PV_W; x++)
       pv[y * PV_W + x] = s->px[(size_t)(y * 4 + 2) * s->pitch + x * 4 + 2];
-  osd_fill(s, 0, 0, s->w, s->h, NAVY, 255);
+  osd_fill(s, 0, 0, s->w, s->h, BG, 255);
   osd_fill(s, L - 2, TOP - 2, PV_W + 4, PV_H + 4, GOLD, 255);
   for (int y = 0; y < PV_H; y++)
     memcpy(&s->px[(size_t)(TOP + y) * s->pitch + L], &pv[y * PV_W], PV_W * 4);
@@ -182,7 +184,7 @@ void guide_draw(osd_surface *s, const m3u_list *l, const epg *g, const guide_vie
     osd_text(s, L + 6, y + 24, name, 1, WHITE);
 
     int n = guide_cells(epg_find(g, chan_id(c)), v->t0, GUIDE_SPAN, GX, GW, cells, 24);
-    osd_fill(s, GX, y, GW, ROW_H - 2, OSD_RGB(16, 26, 84), 255);          /* gaps: no info */
+    osd_fill(s, GX, y, GW, ROW_H - 2, TH->cell_gap, 255);          /* gaps: no info */
     if (!n) osd_text(s, GX + 6, y + 15, "No information", 1, DIM);
     for (int k = 0; k < n; k++) {
       int hl = sel && cells[k].p == focus;

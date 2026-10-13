@@ -100,8 +100,9 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
 - [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
 - [ ] Option to pin 60 Hz (or 59.94) for displays that don't like mode changes
-- [ ] Static style: off / classic / VHS; channel-change "blip" sound on or off
-- [ ] Banner timeout, clock 12h/24h, colour theme (Cable Navy, Teletext, Green Phosphor)
+- [x] Core options (ReplayOS: System Settings): banner timeout, 12/24 h clock, button hints, volume leveller
+  Normal/Loud/Off, tuning static volume, colour theme (Cable Navy / Teletext / Green Phosphor),
+  tuning picture (classic snow / VHS), channel-change click
 - [ ] Sleep timer ("SLEEP 30")
 - [ ] Parental lock per group-title (PIN entered with the D-pad)
 - [ ] Audio track and subtitle selection (A long-press)
