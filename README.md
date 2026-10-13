@@ -7,8 +7,8 @@ libretro core for **ReplayOS on the Raspberry Pi 5**.
 - Static and hiss while tuning, blue **NO SIGNAL** screen
 - Plays live MPEG-TS/HLS over HTTP using ReplayOS's own FFmpeg (nothing to install on the Pi)
 
-> **Status:** early prototype. It's tested headlessly on a real Pi 5 and is
-> **not yet installed into ReplayOS**. See [CLAUDE.md](CLAUDE.md) for build,
+> **Status:** early prototype. It runs inside ReplayOS 2.0.60 by borrowing the
+> PiBench slot (below). See [CLAUDE.md](CLAUDE.md) for build,
 > test and design notes, and [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
 ## Controls (prototype)
@@ -20,6 +20,20 @@ libretro core for **ReplayOS on the Raspberry Pi 5**.
 | B | Last channel |
 | A | Show info banner |
 | Select | Channel list (Up/Down, A to tune, B to close) |
+
+## Install on ReplayOS (borrows the PiBench slot)
+
+ReplayOS can't add new systems yet, so RetroTV takes over **Extra → pibench**.
+`<storage>` is your ReplayOS storage (`/media/nfs`, `/media/usb`, `/media/nvme` or `/media/sd`).
+
+1. Copy `retrotv_libretro.so` (CI artifact `retrotv-aarch64`) to `<storage>/retrotv/`.
+2. Put your M3U URL (or a path) on the first line of `<storage>/retrotv/playlist.txt`.
+3. Copy `replayos/retrotv_install.sh` and `retrotv_uninstall.sh` to `<storage>/roms/_extra/`.
+4. Run **Extra → retrotv_install.sh** (or `bash <storage>/roms/_extra/retrotv_install.sh` as root).
+   It backs up `cores.cfg`, points `[pibench]` at RetroTV and restarts ReplayOS.
+5. Open **Extra → pibench**.
+
+Re-run the installer after each ReplayOS update. `retrotv_uninstall.sh` gives the slot back to PiBench.
 
 ## Build
 
