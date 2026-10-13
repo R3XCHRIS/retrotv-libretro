@@ -81,7 +81,7 @@ static void draw_banner(osd_surface *s, player_state st)
 {
   const m3u_channel *c = &chans.ch[cur];
   int bx = 24, by = PLAYER_H - 132, bw = PLAYER_W - 48, bh = 104;
-  osd_fill(s, bx, by, bw, bh, OSD_RGB(8, 16, 72), 215);           /* cable-box navy */
+  osd_fill(s, bx, by, bw, bh, OSD_RGB(8, 16, 72), 238);           /* cable-box navy */
   osd_fill(s, bx, by, bw, 3, OSD_RGB(240, 200, 40), 255);          /* gold rule */
 
   char num[16], name[40], group[48], line[96];
@@ -105,7 +105,7 @@ static void draw_banner(osd_surface *s, player_state st)
   case PLAYER_CONNECTING:
   case PLAYER_BUFFERING: {
     int dots = (int)(frame_no / 20) % 4;
-    snprintf(line, sizeof(line), "TUNING%.*s", dots, "...");
+    snprintf(line, sizeof(line), "TUNING%.*s%*s %.0fs", dots, "...", 3 - dots, "", player_tuning_seconds(pl));
     break;
   }
   case PLAYER_ERROR: {
@@ -123,6 +123,8 @@ static void draw_banner(osd_surface *s, player_state st)
   default:
     line[0] = '\0';
   }
+  int maxc = (bx + bw - 14 - nx) / 8;                 /* keep inside the banner */
+  if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
   osd_text(s, nx, by + 66, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
   osd_text(s, nx, by + 82, "UP/DN CH  B LAST  A INFO  SELECT LIST", 1, OSD_RGB(130, 130, 160));
 }
@@ -279,6 +281,7 @@ RETRO_API void retro_run(void)
   if (st == PLAYER_PLAYING && !logged_playing) {
     logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs", chans.ch[cur].number, player_tuning_seconds(pl));
     logged_playing = 1;
+    banner_until = t_now() + BANNER_SECONDS;     /* show what came on */
   }
 
   osd_surface s = { fb, PLAYER_W, PLAYER_H, PLAYER_W };

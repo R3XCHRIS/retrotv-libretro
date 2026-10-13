@@ -86,6 +86,17 @@ static size_t audio_batch(const int16_t *d, size_t frames)
 }
 static void input_poll(void) {}
 
+static int thread_count(void)
+{
+  FILE *f = fopen("/proc/self/status", "r");
+  char line[128];
+  int n = -1;
+  while (f && fgets(line, sizeof(line), f))
+    if (!strncmp(line, "Threads:", 8)) { n = atoi(line + 8); break; }
+  if (f) fclose(f);
+  return n;
+}
+
 static int button_id(const char *w)
 {
   static const struct { const char *n; int id; } m[] = {
@@ -193,6 +204,7 @@ int main(int argc, char **argv)
     }
   }
   crc_init();
+  setvbuf(stdout, NULL, _IOLBF, 0);      /* stdout is a pipe over ssh: flush each line */
 
   void *h = dlopen(argv[1], RTLD_NOW);
   if (!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 2; }
@@ -262,8 +274,9 @@ int main(int argc, char **argv)
     }
     if ((i + 1) % (long)fps == 0) {
       double rms = audio_n ? sqrt(audio_sumsq / audio_n) : 0;
-      printf("  t=%3lds audio_rms=%6.0f motion=%5.1f%% worst_run=%.1fms\n",
-             (i + 1) / (long)fps, rms, motion_frames ? 100 * motion_sum / motion_frames : 0, late_max * 1000);
+      printf("  t=%3lds audio_rms=%6.0f motion=%5.1f%% worst_run=%.1fms threads=%d\n",
+             (i + 1) / (long)fps, rms, motion_frames ? 100 * motion_sum / motion_frames : 0, late_max * 1000,
+             thread_count());
       audio_sumsq = 0; audio_n = 0; motion_sum = 0; motion_frames = 0; late_max = 0;
     }
     /* real-time pacing: live streams arrive at 1x */
