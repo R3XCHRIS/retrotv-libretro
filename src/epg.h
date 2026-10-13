@@ -44,4 +44,8 @@ time_t epg_time(const char *s);
  * (curly quotes, dashes, middle dot, ellipsis) mapped, other non-ASCII dropped. */
 void epg_ascii(const char *in, char *out, size_t n);
 
+/* Shorten a title in place to max characters: drop a trailing " - S01E02"
+ * first, then cut and remove a dangling separator (never ends in " -"). */
+void epg_shorten(char *t, int max);
+
 #endif

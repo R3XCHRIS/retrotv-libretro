@@ -130,6 +130,28 @@ void epg_ascii(const char *in, char *out, size_t n)
   out[o] = '\0';
 }
 
+/* Shorten a title to max characters: drop a trailing " - S01E02" first, then
+ * cut and remove any dangling separator so it never ends in " -". */
+void epg_shorten(char *t, int max)
+{
+  if (max < 1) { t[0] = '\0'; return; }
+  if ((int)strlen(t) > max) {
+    char *d = strstr(t, " - S");
+    if (d && d[4] >= '0' && d[4] <= '9') *d = '\0';
+  }
+  if ((int)strlen(t) > max) {
+    int cut = max;
+    if (t[max] != ' ') {                           /* mid-word: back off to a nearby space */
+      int sp = max;
+      while (sp > 0 && t[sp] != ' ') sp--;
+      if (sp >= max * 3 / 5) cut = sp;
+    }
+    t[cut] = '\0';
+  }
+  size_t l = strlen(t);
+  while (l && (t[l - 1] == ' ' || t[l - 1] == '-' || t[l - 1] == ':' || t[l - 1] == ',')) t[--l] = '\0';
+}
+
 /* ---------- parsing ---------- */
 
 typedef struct { char *chan; epg_prog p; } item;

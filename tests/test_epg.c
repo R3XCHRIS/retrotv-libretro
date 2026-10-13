@@ -72,6 +72,18 @@ int main(void)
   epg_ascii("truncate me please", a, 9);
   CHECK(!strcmp(a, "truncate"));
 
+  char sh[64];
+  strcpy(sh, "Three Million Dollars More"); epg_shorten(sh, 25);
+  CHECK(!strcmp(sh, "Three Million Dollars"));                   /* word boundary */
+  strcpy(sh, "The Queen of Spain's Beard - S01E04"); epg_shorten(sh, 28);
+  CHECK(!strcmp(sh, "The Queen of Spain's Beard"));              /* episode code dropped first */
+  strcpy(sh, "Baby, It's Cold Outside"); epg_shorten(sh, 9);
+  CHECK(!strcmp(sh, "Baby"));                                     /* no dangling comma */
+  strcpy(sh, "Supercalifragilistic"); epg_shorten(sh, 6);
+  CHECK(!strcmp(sh, "Superc"));                                   /* one long word: hard cut */
+  strcpy(sh, "Short"); epg_shorten(sh, 20);
+  CHECK(!strcmp(sh, "Short"));
+
   g = epg_parse("not xml at all", from, to);              /* garbage: empty guide, no crash */
   CHECK(g && g->nch == 0);
   epg_free(g);
