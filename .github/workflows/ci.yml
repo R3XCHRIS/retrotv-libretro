@@ -1,0 +1,28 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cross-compiler (zig)
+        run: pip install ziglang==0.13.0
+      - name: FFmpeg 7.1 headers
+        run: make deps
+      - name: Unit tests (ASan/UBSan)
+        run: make test
+      - name: Strict host compile
+        run: make check
+      - name: Cross-build for Raspberry Pi 5 (aarch64)
+        run: make && file build/retrotv_libretro.so build/harness
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retrotv-aarch64
+          path: |
+            build/retrotv_libretro.so
+            build/harness
