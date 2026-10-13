@@ -84,7 +84,8 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 
 ## M2 — Options and QoL (libretro core options)
 - [x] Zoom button (pad Y): FIT letterboxes, ZOOM crops the picture inside detected bars to fill 4:3
-- [x] Loudness: +12 dB with a soft limiter, so TV audio is as loud as games
+- [x] Loudness: AGC to about -18 dBFS (gain -6..+18 dB, fast down/slow up) plus a soft limiter;
+  channels measured from -13 to -39 dBFS, so a fixed boost distorted loud ones
 - [ ] Remember zoom per channel; loudness as an option
 - [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
 - [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
