@@ -30,6 +30,7 @@ typedef struct {
   size_t sel;                      /* highlighted channel */
   size_t top;                      /* first channel row on screen */
   time_t t0;                       /* left edge of the grid */
+  int clock24;                     /* 24 h times, else 12 h */
 } guide_view;
 
 /* Keep sel on screen. */

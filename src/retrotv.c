@@ -18,6 +18,7 @@
 #include "guide.h"
 #include "lastch.h"
 #include "loud.h"
+#include "options.h"
 #include "m3u.h"
 #include "osd.h"
 #include "player.h"
@@ -27,7 +28,7 @@
  * every frame is held equally long. Audio frames per run follow the rate. */
 #define AFRAMES_MAX ((size_t)(PLAYER_RATE / 50))   /* 960 stereo frames per run at 50 Hz */
 _Static_assert(PLAYER_RATE % 50 == 0 && PLAYER_RATE % 60 == 0, "audio frames per video frame must be whole");
-#define BANNER_SECONDS 4.0
+#define INFO_SECONDS 4.0           /* banner after pressing A when the timeout option is Off */
 #define TOAST_SECONDS 2.0
 
 static retro_environment_t env_cb;
@@ -52,6 +53,8 @@ static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
 static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
 static int audio_logged;
 static loud_state loud;            /* AGC on programme audio */
+static rtv_options opts;           /* core options (frontend menu) */
+static int options_version;        /* 2 = v2, 1 = v0 variables, 0 = frontend refused */
 static char store_dir[512];        /* <storage>/retrotv when playlist.txt was found there */
 static char last_path[1100];       /* where the last channel is remembered */
 static int saved_idx = -1;         /* channel index the file currently holds */
@@ -131,7 +134,7 @@ static void tune(size_t idx)
   idx %= chans.count;
   if (idx != cur) prev = cur;
   cur = idx;
-  banner_until = t_now() + BANNER_SECONDS;
+  banner_until = t_now() + opts.banner_secs;
   logged_playing = logged_error = 0;
   logged_attempt = 1;
   logf_(RETRO_LOG_INFO, "tune ch %s \"%s\"", chans.ch[cur].number, chans.ch[cur].name);
@@ -148,12 +151,7 @@ static void clip_copy(char *dst, size_t n, const char *src, size_t maxchars)
 
 /* ---------- drawing ---------- */
 
-static void hhmm(time_t t, char *out, size_t n)
-{
-  struct tm tmv;
-  localtime_r(&t, &tmv);
-  strftime(out, n, "%H:%M", &tmv);
-}
+static void hhmm(time_t t, char *out, size_t n) { epg_clock(t, opts.clock24, 0, out, n); }
 
 static void draw_banner(osd_surface *s, player_state st)
 {
@@ -169,7 +167,7 @@ static void draw_banner(osd_surface *s, player_state st)
 
   /* Now / Next from the guide, if it has this channel */
   const char *gid = c->tvg_id && *c->tvg_id ? c->tvg_id : c->number;
-  char now_t[48] = "", next_t[48] = "", t0[8] = "", t1[8] = "", t2[8] = "";
+  char now_t[48] = "", next_t[48] = "", t0[12] = "", t1[12] = "", t2[12] = "";
   double frac = -1;
   pthread_mutex_lock(&guide_mu);
   const epg_prog *pn, *px;
@@ -202,8 +200,8 @@ static void draw_banner(osd_surface *s, player_state st)
   time_t tt = time(NULL);
   struct tm tmv;
   localtime_r(&tt, &tmv);
-  char clk[8];
-  strftime(clk, sizeof(clk), "%H:%M", &tmv);
+  char clk[12];
+  epg_clock(tt, opts.clock24, 1, clk, sizeof(clk));
   osd_text_shadow(s, bx + bw - osd_text_width(clk, 2) - 14, by + 18, clk, 2, OSD_RGB(255, 255, 255));
 
   switch (st) {
@@ -258,7 +256,7 @@ static void draw_banner(osd_surface *s, player_state st)
   int maxc = (right - nx) / 8;                       /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
   osd_text(s, nx, y, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
-  osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  SEL LIST  START GUIDE", 1, OSD_RGB(130, 130, 160));
+  if (opts.hints) osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  SEL LIST  START GUIDE", 1, OSD_RGB(130, 130, 160));
 }
 
 static void draw_list(osd_surface *s)
@@ -598,6 +596,28 @@ static void send_audio(void)
   }
 }
 
+/* ---------- core options ---------- */
+
+static void apply_options(void)
+{
+  options_read(&opts, env_cb);
+  loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
+  gv.clock24 = opts.clock24;
+}
+
+/* the user changed something in the frontend's menu */
+static void check_options(void)
+{
+  bool upd = false;
+  if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &upd) && upd) {
+    apply_options();
+  logf_(RETRO_LOG_INFO, "core options: %s", options_version == 2 ? "v2" : options_version == 1 ? "v0 variables" : "not supported by frontend");
+    logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s", opts.banner_secs,
+          opts.clock24 ? "24h" : "12h", opts.leveller == 2 ? "loud" : opts.leveller ? "normal" : "off",
+          opts.static_vol, opts.hints ? "on" : "off");
+  }
+}
+
 /* ---------- refresh and aspect ---------- */
 
 static void draw_toast(osd_surface *s)
@@ -682,7 +702,7 @@ static void handle_input(void)
   if (PRESSED(UP) || PRESSED(R))   tune((cur + 1) % chans.count);
   if (PRESSED(DOWN) || PRESSED(L)) tune(cur ? cur - 1 : chans.count - 1);
   if (FACE(PAD_B))     tune(prev);
-  if (FACE(PAD_A))     banner_until = t_now() + BANNER_SECONDS;
+  if (FACE(PAD_A))     banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
   if (PRESSED(START)) {
     guide_open = 1;
@@ -715,6 +735,8 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
   if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) log_cb = logging.log;
   bool no_game = true;   /* launched from ReplayOS Extra without a playlist path */
   cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
+  options_version = options_register(cb);
+  options_defaults(&opts);
 }
 RETRO_API void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
 RETRO_API void retro_set_audio_sample(retro_audio_sample_t cb) { audio_cb = cb; }
@@ -756,6 +778,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
 
   char err[256];
   if (ffapi_load(err, sizeof(err))) { logf_(RETRO_LOG_ERROR, "FFmpeg: %s", err); return false; }
+  apply_options();
   p_av_log_set_level(AV_LOG_FATAL);   /* joining live streams mid-GOP logs harmless h264 errors */
   p_avformat_network_init();
 
@@ -806,6 +829,7 @@ RETRO_API void retro_unload_game(void)
 RETRO_API void retro_run(void)
 {
   input_poll_cb();
+  check_options();
   handle_input();
 
   if (!chans.count) {
@@ -821,7 +845,7 @@ RETRO_API void retro_run(void)
 
   player_state st = player_get_state(pl);
   player_audio(pl, abuf, aframes(), 1.0 / fps_out);
-  loud_process(&loud, abuf, aframes(), PLAYER_RATE);   /* even out channel loudness */
+  if (opts.leveller) loud_process(&loud, abuf, aframes(), PLAYER_RATE);   /* even out channel loudness */
   st = player_get_state(pl);
   char why[160];
   int att = player_attempt(pl, why, sizeof(why));
@@ -840,7 +864,7 @@ RETRO_API void retro_run(void)
           player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
     logged_playing = 1;
     played_at = t_now();
-    banner_until = t_now() + BANNER_SECONDS;     /* show what came on */
+    banner_until = t_now() + opts.banner_secs;   /* show what came on */
     follow_refresh(in.fps);
   }
 
@@ -862,7 +886,7 @@ RETRO_API void retro_run(void)
     /* quiet hiss while tuning */
     for (size_t i = 0; i < aframes(); i++) {
       noise_seed ^= noise_seed << 13; noise_seed ^= noise_seed >> 17; noise_seed ^= noise_seed << 5;
-      int16_t v = (int16_t)((int)(noise_seed & 0x1fff) - 0x1000);   /* about -23 dBFS, fixed (no AGC) */
+      int16_t v = (int16_t)(((int)(noise_seed & 0x1fff) - 0x1000) * opts.static_vol / 2);   /* about -23 dBFS at Normal */
       abuf[2 * i] = abuf[2 * i + 1] = v;
     }
   }

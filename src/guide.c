@@ -77,12 +77,6 @@ static void label(const char *s, char *out, size_t n, int max)
   epg_shorten(out, max);
 }
 
-static void hhmm(time_t t, char *out, size_t n)
-{
-  struct tm tmv;
-  localtime_r(&t, &tmv);
-  strftime(out, n, "%H:%M", &tmv);
-}
 
 /* word-wrap text into at most lines lines of cols characters */
 static void wrap(osd_surface *s, int x, int y, const char *text, int cols, int lines, uint32_t rgb)
@@ -124,7 +118,7 @@ static void draw_preview(osd_surface *s)
 static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, const guide_view *v)
 {
   int x = L + PV_W + 16, cols = (R - x) / 8;
-  char buf[128], t0[8], t1[8];
+  char buf[128], t0[12], t1[12];
   if (v->sel < l->count) {
     const m3u_channel *c = &l->ch[v->sel];
     char name[64];
@@ -138,8 +132,8 @@ static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, cons
   }
   label(p->title, buf, sizeof(buf), (R - x) / 16);
   osd_text_shadow(s, x, TOP + 18, buf, 2, WHITE);
-  hhmm(p->start, t0, sizeof(t0));
-  hhmm(p->stop, t1, sizeof(t1));
+  epg_clock(p->start, v->clock24, 1, t0, sizeof(t0));
+  epg_clock(p->stop, v->clock24, 1, t1, sizeof(t1));
   char sub[96] = "";
   if (p->sub) label(p->sub, sub, sizeof(sub), cols - 16);
   snprintf(buf, sizeof(buf), "%s - %s  %s", t0, t1, sub);
@@ -151,10 +145,10 @@ static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, cons
   }
 }
 
-static void draw_ruler(osd_surface *s, time_t t0, time_t now)
+static void draw_ruler(osd_surface *s, time_t t0, time_t now, int clock24)
 {
   struct tm tmv;
-  char day[24], t[8];
+  char day[24], t[12];
   localtime_r(&now, &tmv);
   strftime(day, sizeof(day), "%a %d %b", &tmv);
   for (char *c = day; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
@@ -162,7 +156,7 @@ static void draw_ruler(osd_surface *s, time_t t0, time_t now)
   osd_text(s, L + 6, RULER_Y + 5, day, 1, NAVY);
   for (time_t m = t0; m < t0 + GUIDE_SPAN; m += GUIDE_STEP) {
     int x = GX + (int)((long long)(m - t0) * GW / GUIDE_SPAN);
-    hhmm(m, t, sizeof(t));
+    epg_clock(m, clock24, 1, t, sizeof(t));
     osd_fill(s, x, RULER_Y, 2, 18, NAVY, 255);
     osd_text(s, x + 6, RULER_Y + 5, t, 1, NAVY);
   }
@@ -173,7 +167,7 @@ void guide_draw(osd_surface *s, const m3u_list *l, const epg *g, const guide_vie
   draw_preview(s);
   const epg_prog *focus = guide_focus(g, l, v, now);
   draw_info(s, l, focus, v);
-  draw_ruler(s, v->t0, now);
+  draw_ruler(s, v->t0, now, v->clock24);
 
   guide_cell cells[24];
   for (int r = 0; r < GUIDE_ROWS && v->top + (size_t)r < l->count; r++) {

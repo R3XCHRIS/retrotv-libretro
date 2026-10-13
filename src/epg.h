@@ -48,4 +48,8 @@ void epg_ascii(const char *in, char *out, size_t n);
  * first, then cut and remove a dangling separator (never ends in " -"). */
 void epg_shorten(char *t, int max);
 
+/* Clock text for t in local time: "20:40" (24 h) or "8:40" (12 h); with
+ * ampm, the 12-hour form gets "pm"/"am" ("8:40pm"). */
+void epg_clock(time_t t, int h24, int ampm, char *out, size_t n);
+
 #endif
