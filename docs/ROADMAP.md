@@ -13,9 +13,9 @@ Dispatcharr (v0.32.0 here) can already serve a channel subset and pre-transcoded
 streams through its normal M3U link. RetroTV keeps reading plain M3U + XMLTV;
 no Dispatcharr API client is needed for this.
 
-- [ ] **Channel subset:** a Dispatcharr *Channel Profile* (e.g. "RetroTV") with only the
+- [x] **Channel subset:** a Dispatcharr *Channel Profile* (e.g. "RetroTV") with only the
   channels to flip through. Its link is `/output/m3u/<profile>` and the EPG is `/output/epg/<profile>`.
-- [ ] **Crop/downscale before the Pi:** a Dispatcharr *Output Profile* (Settings → Output
+- [x] **Crop/downscale before the Pi:** a Dispatcharr *Output Profile* (Settings → Output
   Profiles; ffmpeg reading `pipe:0`, writing MPEG-TS to `pipe:1`), selected with
   `?output_profile=<id>` on the M3U link. Dispatcharr then appends it to every
   `/proxy/ts/stream/<uuid>` URL. One transcode runs per active channel and is shared by all clients.
@@ -29,12 +29,41 @@ no Dispatcharr API client is needed for this.
     sources (seen: 1280x720 with SAR 405:539, a 4:3 picture) get cropped in storage pixels and come out stretched.
   - Sources seen: 1920x1080/1280x720/960x720/640x480/640x464/1920x824, 23.976–50 fps, mostly AC-3 5.1 (one 44.1 kHz).
 - [ ] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>`
-- [ ] Core: fast path when a frame is already 640x480 square-pixel (skip sws scaling; just a copy)
-- [ ] Measure on the Pi, direct versus transcoded: tune time (expect +0.5–1.5 s for ffmpeg
-  start and the first keyframe), `retro_run` and decode-thread CPU, and A/V sync
+- [x] Core: fast path when a frame is already 640x480 square-pixel (no resize, no border clear; the
+  YUV->RGB conversion still runs because decoders output YUV)
+- [x] Measure on the Pi, direct versus transcoded (Oct 2026, below)
 - [ ] Try hardware encode on Yoda (VAAPI) if the CPU cost of several transcodes is too high.
   Don't use `-fflags +discardcorrupt` (it starves the VAAPI decoder).
 - [ ] Optional: let the output profile also set the frame rate (e.g. `fps=50` for PAL) once M2's 50 Hz option exists
+
+### M1a measurements (Pi 5, harness, Oct 2026)
+
+Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU from
+`scripts/cpu-summary.py`, % of one core, the Pi 5 has 400%). Sources: 640x480p24 AAC,
+1080p25 AC-3 5.1, 1280x720p24 anamorphic AC-3, 1080p50 AC-3, 720p25 AC-3. Transcoded = output profile "fit" (libx264).
+
+| | Direct | Transcoded (fit, x264) |
+|---|---|---|
+| Tune to picture, first visit | 2.8 / 4.0 / 5.2 / 14.6 s, one >16 s | 3.2 / 4.0 / 7.4 / 11.3 s, one >16 s |
+| Tune to picture, revisit after 10–20 s | 4.0–4.3 s | 4.0–4.9 s |
+| `retro_run` worst per second (median / p95 / max) | 1.7 / 3.7 / 23 ms | 1.5 / 2.4 / 21 ms |
+| Process CPU (avg / peak) | 26.6% / 78% | **10.8% / 22%** |
+| `retrotv-dec` + FFmpeg decoder threads (avg) | 6.6% + 12.0% | **1.1% + 1.9%** |
+| Peak threads | 7 | 7 |
+| A/V skew (avg / max) | 4.6–6.2 / 12 ms | 4.4–5.3 / 12 ms |
+| Dropped frames | 0 | 0 |
+
+- Tune time is dominated by Dispatcharr's upstream connection (2.7–13 s cold, variable run to
+  run); the transcode adds about 0.1–0.7 s, and its first keyframe arrives with its first byte.
+  The ">16 s" channel stalled upstream in both runs (in the transcoded run its ffmpeg sat at 0% CPU).
+- There is no "warm" tune here: Dispatcharr's `channel_shutdown_delay` is 0 (default), so a channel stops
+  when RetroTV leaves it. A second profile on a still-running channel started in 0.17 s.
+- The banner and log show `640x480 h264 ... aac, native` for every transcoded channel (fast path on).
+- Cost moves to Yoda (Intel N100, 4 cores): one libx264 transcode is 30–60% of a core for SD/720p and
+  130–190% for 1080p50. A full-GPU VAAPI pipeline on the same 1080p50 channel used **3.5x less CPU**
+  (7.5 s vs 26.7 s CPU for 22 s of stream) with the same geometry:
+  `-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -i pipe:0 -map 0:v:0 -map 0:a:0? -vf "scale_vaapi=w='trunc(iw*sar/2)*2':h=ih,scale_vaapi=w=640:h=480:force_original_aspect_ratio=decrease,pad_vaapi=w=640:h=480:x=(ow-iw)/2:y=(oh-ih)/2,setsar=1" -c:v h264_vaapi -rc_mode VBR -b:v 1500k -maxrate 1800k -bf 0 -force_key_frames "expr:gte(t,n_forced*1)" -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
+  (the Dispatcharr container already has `/dev/dri` and FFmpeg 8.1 with `h264_vaapi`/`pad_vaapi`).
 
 ## Later — Dispatcharr API (only where M3U/XMLTV can't help)
 - [ ] When a channel stays stuck after retries, ask Dispatcharr to reset it
