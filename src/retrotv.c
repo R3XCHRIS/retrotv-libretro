@@ -53,6 +53,10 @@ static double fps_out = 60.0;      /* current refresh */
 static double t_clock;             /* seconds of output since load */
 static int refresh_refused;        /* frontend said no to SET_SYSTEM_AV_INFO */
 static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
+static chanpref zprefs;            /* remembered Fit/Zoom per channel */
+static char zoom_path[1100];
+static int zoom_save;              /* zprefs changed: write when the saver is free */
+static double stream_fps;          /* fps of the channel playing now (for the refresh option) */
 static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
 static int audio_logged;
 static loud_state loud;            /* AGC on programme audio */
@@ -153,6 +157,10 @@ static void tune(size_t idx)
   logf_(RETRO_LOG_INFO, "tune ch %s \"%s\"", chans.ch[cur].number, chans.ch[cur].name);
   loud_reset(&loud);
   if (opts.blip) blip_left = BLIP_FRAMES;
+  int zr = opts.zoom_remember ? chanpref_get(&zprefs, &chans.ch[cur]) : -1;
+  zoom = zr >= 0 ? zr : opts.zoom_default;
+  player_set_zoom(pl, zoom);
+  stream_fps = 0;
   player_open(pl, chans.ch[cur].url);
 }
 
@@ -577,6 +585,10 @@ static void last_init(const char *src)
   if (!env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || !dir || !*dir) dir = NULL;
   if (!dir) dir = *store_dir ? store_dir : "/tmp";
   snprintf(state_dir, sizeof(state_dir), "%s", dir);
+  snprintf(zoom_path, sizeof(zoom_path), "%s/retrotv-zoom-%08x.txt", dir, (unsigned)lastch_hash(src));
+  char *zt = slurp(zoom_path, 1u << 20);
+  chanpref_parse(&zprefs, zt);
+  free(zt);
   snprintf(last_path, sizeof(last_path), "%s/retrotv-last-%08x.txt", dir, (unsigned)lastch_hash(src));
   logf_(RETRO_LOG_INFO, "last channel file: %s", last_path);
 }
@@ -611,12 +623,13 @@ static int write_file(const char *path, const char *text)
   return ok ? rename(tmp, path) : (remove(tmp), -1);
 }
 
-typedef struct { char path[1100]; char text[400]; } save_job;
+typedef struct { char path[1100]; char *text; } save_job;
 
 static void *save_main(void *arg)
 {
   save_job *j = arg;
   if (write_file(j->path, j->text)) atomic_store(&save_errno, errno ? errno : EIO);
+  free(j->text);
   free(j);
   atomic_store(&saving, 0);
   return NULL;
@@ -631,14 +644,13 @@ static int save_text_async(const char *path, const char *text)
   pthread_t t;
   pthread_attr_t a;
   int ok = 0;
-  if (j && !pthread_attr_init(&a)) {
+  if (j && (j->text = strdup(text)) && !pthread_attr_init(&a)) {
     snprintf(j->path, sizeof(j->path), "%s", path);
-    snprintf(j->text, sizeof(j->text), "%s", text);
     pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
     ok = !pthread_create(&t, &a, save_main, j);
     pthread_attr_destroy(&a);
   }
-  if (!ok) { free(j); atomic_store(&saving, 0); return -1; }
+  if (!ok) { if (j) free(j->text); free(j); atomic_store(&saving, 0); return -1; }
   return 0;
 }
 
@@ -688,11 +700,14 @@ static void send_audio(void)
 
 /* ---------- core options ---------- */
 
+static void follow_refresh(double fps);
+
 static void apply_options(void)
 {
   options_read(&opts, env_cb);
   loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
   theme_set(opts.theme);
+  if (pl) player_set_margin(pl, opts.overscan);
   gv.clock24 = opts.clock24;
 }
 
@@ -702,6 +717,7 @@ static void check_options(void)
   bool upd = false;
   if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &upd) && upd) {
     apply_options();
+    follow_refresh(0);                               /* a refresh lock applies right away */
   logf_(RETRO_LOG_INFO, "core options: %s", options_version == 2 ? "v2" : options_version == 1 ? "v0 variables" : "not supported by frontend");
     logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s", opts.banner_secs,
           opts.clock24 ? "24h" : "12h", opts.leveller == 2 ? "loud" : opts.leveller ? "normal" : "off",
@@ -723,10 +739,13 @@ static void show_toast(const char *t)
 }
 
 /* Ask the frontend for 50 Hz on 25/50 fps channels and 60 Hz otherwise. */
-static void follow_refresh(double stream_fps)
+static void follow_refresh(double fps)
 {
-  if (refresh_refused || stream_fps <= 0) return;
-  double want = (fabs(stream_fps - 25.0) < 0.6 || fabs(stream_fps - 50.0) < 1.0) ? 50.0 : 60.0;
+  if (refresh_refused) return;
+  if (fps > 0) stream_fps = fps;
+  double want = opts.refresh ? opts.refresh                                   /* locked */
+              : stream_fps <= 0 ? fps_out                                     /* nothing playing yet */
+              : (fabs(stream_fps - 25.0) < 0.6 || fabs(stream_fps - 50.0) < 1.0) ? 50.0 : 60.0;
   if (want == fps_out) return;
   double was = fps_out;
   fps_out = want;
@@ -738,7 +757,7 @@ static void follow_refresh(double stream_fps)
     logf_(RETRO_LOG_WARN, "frontend refused %.0f Hz; staying at %.0f Hz", want, was);
     return;
   }
-  logf_(RETRO_LOG_INFO, "refresh %.0f Hz -> %.0f Hz for a %.2f fps stream", was, want, stream_fps);
+  logf_(RETRO_LOG_INFO, "refresh %.0f Hz -> %.0f Hz (%s, stream %.2f fps)", was, want, opts.refresh ? "locked" : "auto", stream_fps);
 }
 
 /* ---------- input ---------- */
@@ -816,6 +835,7 @@ static void handle_input(void)
   if (FACE(PAD_Y)) {
     zoom = !zoom;
     player_set_zoom(pl, zoom);
+    if (opts.zoom_remember && !chanpref_set(&zprefs, &chans.ch[cur], zoom)) zoom_save = 1;
     show_toast(zoom ? "ZOOM" : "FIT");
     logf_(RETRO_LOG_INFO, "aspect %s", zoom ? "zoom" : "fit");
   }
@@ -897,6 +917,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   }
   pl = player_create();
   if (!pl) { m3u_free(&chans); return false; }
+  player_set_margin(pl, opts.overscan);
   cur = prev = 0;
   if (chans.count) {
     logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, src);
@@ -934,7 +955,9 @@ RETRO_API void retro_unload_game(void)
   last_path[0] = store_dir[0] = state_dir[0] = '\0';
   ob_why = OB_NO_FILE;
   ob_err[0] = ob_path[0] = '\0';
-  testcard_on = welcome_on = welcome_save = 0;
+  testcard_on = welcome_on = welcome_save = zoom_save = 0;
+  chanpref_free(&zprefs);
+  zoom_path[0] = '\0';
   saved_idx = -1;
 }
 
@@ -998,6 +1021,11 @@ RETRO_API void retro_run(void)
   if (atomic_load(&guide_msg_ready)) {
     logf_(RETRO_LOG_INFO, "%s", guide_msg);
     atomic_store(&guide_msg_ready, 0);
+  }
+  if (zoom_save) {
+    char *zt = chanpref_format(&zprefs);
+    if (zt && !save_text_async(zoom_path, zt)) zoom_save = 0;
+    free(zt);
   }
   if (welcome_save) {
     char wp[1100];

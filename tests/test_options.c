@@ -39,13 +39,16 @@ int main(void)
   options_defaults(&o);
   CHECK(o.banner_secs == 4 && o.clock24 && o.hints && o.leveller == 1 && o.static_vol == 2);
   CHECK(o.theme == 0 && !o.static_vhs && !o.blip);
+  CHECK(o.overscan == 0 && o.refresh == 0 && !o.zoom_default && o.zoom_remember);
 
   const char *kv[] = { "retrotv_banner_timeout", "0", "retrotv_clock", "12", "retrotv_leveller", "loud",
                        "retrotv_static_sound", "off", "retrotv_hints", "off", "retrotv_theme", "phosphor",
-                       "retrotv_static_style", "vhs", "retrotv_blip", "on", NULL };
+                       "retrotv_static_style", "vhs", "retrotv_blip", "on", "retrotv_overscan", "10",
+                       "retrotv_refresh", "50", "retrotv_zoom_default", "zoom", "retrotv_zoom_remember", "off", NULL };
   options_parse(&o, map_get, kv);
   CHECK(o.banner_secs == 0 && !o.clock24 && o.leveller == 2 && o.static_vol == 0 && !o.hints);
   CHECK(o.theme == 2 && o.static_vhs && o.blip);
+  CHECK(o.overscan == 10 && o.refresh == 50 && o.zoom_default && !o.zoom_remember);
 
   const char *bad[] = { "retrotv_banner_timeout", "99", "retrotv_leveller", "LOUD", NULL };
   options_parse(&o, map_get, bad);                    /* not a listed choice: default */
@@ -68,8 +71,13 @@ int main(void)
 
   fe_version = 0;                                     /* old frontend: "Desc; default|others" */
   CHECK(options_register(fake_env) == 1);
-  CHECK(got_v0 && !strcmp(got_v0[1].key, "retrotv_clock") && !strcmp(got_v0[1].value, "Clock; 24|12"));
-  CHECK(!strcmp(got_v0[3].value, "Colour theme; navy|teletext|phosphor"));
+  int ci = -1, ti = -1;
+  for (int i = 0; got_v0[i].key; i++) {
+    if (!strcmp(got_v0[i].key, "retrotv_clock")) ci = i;
+    if (!strcmp(got_v0[i].key, "retrotv_theme")) ti = i;
+  }
+  CHECK(ci >= 0 && !strcmp(got_v0[ci].value, "Clock; 24|12"));
+  CHECK(ti >= 0 && !strcmp(got_v0[ti].value, "Colour theme; navy|teletext|phosphor"));
   CHECK(got_v0[options_count()].key == NULL);
 
   options_read(&o, fake_env);                         /* reads through GET_VARIABLE */

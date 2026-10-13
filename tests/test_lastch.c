@@ -1,5 +1,6 @@
 /* Host unit tests for remembering the last channel. Build: make test */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../src/lastch.h"
@@ -30,6 +31,21 @@ int main(void)
   CHECK(lastch_find(&b, "number=\r\nname=MASH\r\n") == 0);   /* CRLF tolerated */
   CHECK(lastch_hash("http://a/m3u") != lastch_hash("http://b/m3u"));
   CHECK(lastch_hash("x") == lastch_hash("x"));
+
+  /* per-channel zoom */
+  chanpref cp = { 0 };
+  CHECK(chanpref_get(&cp, &a.ch[0]) == -1);
+  CHECK(!chanpref_set(&cp, &a.ch[0], 1) && !chanpref_set(&cp, &a.ch[2], 0) && !chanpref_set(&cp, &a.ch[0], 1));
+  CHECK(cp.n == 2 && chanpref_get(&cp, &a.ch[0]) == 1 && chanpref_get(&cp, &a.ch[2]) == 0);
+  char *txt = chanpref_format(&cp);
+  CHECK(txt && !strcmp(txt, "2\tBlackadder\t1\n19\tMASH\t0\n"));
+  chanpref back = { 0 };
+  chanpref_parse(&back, txt);
+  chanpref_parse(&back, "junk\n\tno\tx\n14\tHappy Days\t1");   /* bad lines ignored, no final newline ok */
+  CHECK(back.n == 3 && chanpref_get(&back, &a.ch[0]) == 1 && chanpref_get(&back, &a.ch[1]) == 1);
+  free(txt);
+  chanpref_free(&cp);
+  chanpref_free(&back);
 
   m3u_free(&a);
   m3u_free(&b);

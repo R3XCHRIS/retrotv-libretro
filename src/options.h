@@ -15,6 +15,10 @@ typedef struct {
   int theme;               /* THEME_NAVY, THEME_TELETEXT, THEME_PHOSPHOR */
   int static_vhs;          /* tuning picture: 0 classic snow, 1 VHS */
   int blip;                /* channel-change sound */
+  int overscan;            /* video margin, percent per side: 0, 5, 10 */
+  int refresh;             /* 0 auto (follow the stream), 50, 60 */
+  int zoom_default;        /* 0 FIT, 1 ZOOM for channels without a remembered choice */
+  int zoom_remember;       /* remember Y per channel */
 } rtv_options;
 
 /* Defaults, as declared in the table. */

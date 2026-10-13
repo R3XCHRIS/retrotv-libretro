@@ -14,11 +14,24 @@ typedef struct {
 } opt_def;
 
 static const struct { const char *key, *desc, *info; } CATS[] = {
+  { "picture", "Picture", "Video size, zoom and refresh rate." },
   { "sound", "Sound", "Volume leveller and tuning sounds." },
   { "interface", "Interface", "Banner, clock and on-screen hints." },
 };
 
 static const opt_def OPTS[] = {
+  { "retrotv_overscan", "Overscan margin",
+    "Shrink the video so its edges stay visible on screens that cut them off. Menus are always inside the safe area.",
+    "picture", "0", { { "0", "None" }, { "5", "5%" }, { "10", "10%" } } },
+  { "retrotv_zoom_default", "Picture",
+    "Fit shows the whole picture with black bars; Zoom fills the 4:3 screen. Y switches while watching.",
+    "picture", "fit", { { "fit", "Fit" }, { "zoom", "Zoom" } } },
+  { "retrotv_zoom_remember", "Remember zoom per channel",
+    "Keep each channel's Fit/Zoom choice from the Y button.",
+    "picture", "on", { { "on", "On" }, { "off", "Off" } } },
+  { "retrotv_refresh", "Refresh rate",
+    "Auto switches to 50 Hz for 25/50 fps channels so motion is smooth. Lock it if your screen dislikes mode changes.",
+    "picture", "auto", { { "auto", "Auto (follow the channel)" }, { "60", "60 Hz" }, { "50", "50 Hz" } } },
   { "retrotv_banner_timeout", "Banner timeout",
     "How long the channel banner stays up after a channel change. Off: only when you press A.",
     "interface", "4", { { "2", "2 seconds" }, { "4", "4 seconds" }, { "8", "8 seconds" }, { "0", "Off" } } },
@@ -82,6 +95,11 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   o->theme = !strcmp(t, "teletext") ? 1 : !strcmp(t, "phosphor") ? 2 : 0;
   o->static_vhs = !strcmp(val("retrotv_static_style", get, ctx), "vhs");
   o->blip = !strcmp(val("retrotv_blip", get, ctx), "on");
+  o->overscan = atoi(val("retrotv_overscan", get, ctx));
+  const char *r = val("retrotv_refresh", get, ctx);
+  o->refresh = !strcmp(r, "auto") ? 0 : atoi(r);
+  o->zoom_default = !strcmp(val("retrotv_zoom_default", get, ctx), "zoom");
+  o->zoom_remember = !strcmp(val("retrotv_zoom_remember", get, ctx), "on");
 }
 
 void options_defaults(rtv_options *o) { options_parse(o, NULL, NULL); }
