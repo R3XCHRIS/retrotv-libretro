@@ -71,7 +71,7 @@ char *m3u_ascii(const char *s)
   return t;
 }
 
-static int is_url(const char *s)
+int m3u_is_url(const char *s)
 {
   const char *p = strstr(s, "://");
   if (!p || p == s) return 0;
@@ -130,7 +130,7 @@ int m3u_parse(const char *text, const char *base_dir, m3u_list *out)
       } else if (*s != '#') {
         char *loc = trim_dup(s, e);
         if (!loc) { chan_free(&pending); m3u_free(out); return -1; }
-        if (!is_url(loc) && loc[0] != '/' && base_dir && *base_dir) {
+        if (!m3u_is_url(loc) && loc[0] != '/' && base_dir && *base_dir) {
           size_t n = strlen(base_dir) + 1 + strlen(loc) + 1;
           char *abs = malloc(n);
           if (!abs) { free(loc); chan_free(&pending); m3u_free(out); return -1; }

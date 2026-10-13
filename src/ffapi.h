@@ -26,6 +26,9 @@
   X(avformat, av_find_best_stream)                            \
   X(avformat, av_read_frame)                                  \
   X(avformat, avformat_close_input)                           \
+  X(avformat, avio_open2)                                     \
+  X(avformat, avio_read)                                      \
+  X(avformat, avio_closep)                                    \
   X(avcodec, avcodec_find_decoder)                            \
   X(avcodec, avcodec_alloc_context3)                          \
   X(avcodec, avcodec_parameters_to_context)                   \
