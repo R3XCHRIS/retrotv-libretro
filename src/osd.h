@@ -21,5 +21,8 @@ int osd_text_shadow(osd_surface *s, int x, int y, const char *text, int scale, u
 int osd_text_width(const char *text, int scale);
 /* TV static: random grey noise. seed is advanced. */
 void osd_static(osd_surface *s, uint32_t *seed);
+/* VHS-style static: colour speckle, a rolling bright tracking band and
+ * jittered lines. frame advances the band. */
+void osd_static_vhs(osd_surface *s, uint32_t *seed, unsigned frame);
 
 #endif

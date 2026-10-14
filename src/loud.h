@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #define LOUD_TARGET_DB (-18.0)   /* average level aimed for (dBFS, RMS) */
+#define LOUD_TARGET_LOUD_DB (-14.0)  /* the "Loud" setting, closer to games */
 #define LOUD_MIN_DB (-6.0)       /* gain limits */
 #define LOUD_MAX_DB 18.0
 
@@ -16,6 +17,7 @@ typedef struct {
   double level;        /* smoothed signal power (full scale = 1) */
   double gain;         /* current linear gain */
   double fast_left;    /* seconds of fast tracking left after a reset */
+  double target_db;    /* aim; 0 = LOUD_TARGET_DB */
 } loud_state;
 
 /* Start over (new channel): gain back to unity, track quickly for a moment. */

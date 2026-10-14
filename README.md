@@ -22,9 +22,10 @@ Button names are the labels on an Xbox-style pad (ReplayOS maps pads by position
 | D-pad Down / L | Channel down |
 | A | Show info banner |
 | B | Last channel |
-| Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM) |
+| Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM), remembered per channel |
 | Select | Channel list (Up/Down, A to tune, B to close) |
 | Start | TV guide (Up/Down channel, Left/Right 30 min, A to watch, B or Start to close) |
+| X | Menu: sleep timer, audio track, volume leveller (for now; the saved default is in System Settings), Fit/Zoom, test card, show controls |
 
 ## Install on ReplayOS (borrows the A/V test slot)
 
@@ -34,6 +35,14 @@ ReplayOS can't add new systems yet, so RetroTV takes over **Extra → audio_vide
 
 1. Copy `retrotv_libretro.so` (CI artifact `retrotv-aarch64`) to `<storage>/retrotv/`.
 2. Put your M3U URL (or a path) on the first line of `<storage>/retrotv/playlist.txt`.
+   The TV guide comes from the playlist's `x-tvg-url`. To use a different guide, or if your
+   playlist has none, add a line `epg=<URL or path>` (XMLTV, `.xml` or `.xml.gz`):
+   ```
+   http://dispatcharr:9191/output/m3u/my-profile
+   epg=http://example.org/guide.xml.gz
+   ```
+   Channels are matched to the guide by `tvg-id`, then by name (so a guide from another
+   source works), then by channel number (own guide only).
 3. Copy `replayos/retrotv_install.sh` and `retrotv_uninstall.sh` to `<storage>/roms/_extra/`.
 4. Run **Extra → retrotv_install.sh** (or `bash <storage>/roms/_extra/retrotv_install.sh` as root).
    It backs up `cores.cfg`, points `[avtest]` at RetroTV and restarts ReplayOS.

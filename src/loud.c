@@ -11,10 +11,11 @@
 
 static double db_to_pow(double db) { return pow(10.0, db / 10.0); }
 static double db_to_lin(double db) { return pow(10.0, db / 20.0); }
+static double target(const loud_state *st) { return st->target_db < 0 ? st->target_db : LOUD_TARGET_DB; }
 
 void loud_reset(loud_state *st)
 {
-  st->level = db_to_pow(LOUD_TARGET_DB);   /* assume on target: unity gain */
+  st->level = db_to_pow(target(st));   /* assume on target: unity gain */
   st->gain = 1.0;
   st->fast_left = FAST_FOR_S;
 }
@@ -34,7 +35,7 @@ void loud_process(loud_state *st, int16_t *s, size_t frames, int rate)
   if (p > db_to_pow(GATE_DB)) {
     double tau = st->fast_left > 0 ? FAST_S : p > st->level ? ATTACK_S : RELEASE_S;
     st->level += (p - st->level) * (1.0 - exp(-dt / tau));
-    g1 = sqrt(db_to_pow(LOUD_TARGET_DB) / st->level);
+    g1 = sqrt(db_to_pow(target(st)) / st->level);
     if (g1 < db_to_lin(LOUD_MIN_DB)) g1 = db_to_lin(LOUD_MIN_DB);
     if (g1 > db_to_lin(LOUD_MAX_DB)) g1 = db_to_lin(LOUD_MAX_DB);
   }

@@ -8,9 +8,13 @@ static inline uint32_t blend(uint32_t dst, uint32_t src, int a)
 {
   if (a >= 255) return src;
   if (a <= 0) return dst;
-  uint32_t rb = ((src & 0xff00ff) * (uint32_t)a + (dst & 0xff00ff) * (uint32_t)(255 - a)) / 255;
-  uint32_t g  = ((src & 0x00ff00) * (uint32_t)a + (dst & 0x00ff00) * (uint32_t)(255 - a)) / 255;
-  return (rb & 0xff00ff) | (g & 0x00ff00);
+  /* per channel: dividing packed red+blue by 255 leaked red's remainder into blue */
+  uint32_t out = 0;
+  for (int sh = 0; sh <= 16; sh += 8) {
+    uint32_t sc = (src >> sh) & 0xff, dc = (dst >> sh) & 0xff;
+    out |= ((sc * (uint32_t)a + dc * (uint32_t)(255 - a) + 127) / 255) << sh;
+  }
+  return out;
 }
 
 void osd_fill(osd_surface *s, int x, int y, int w, int h, uint32_t rgb, int alpha)
@@ -79,4 +83,25 @@ void osd_static(osd_surface *s, uint32_t *seed)
     }
   }
   *seed = x;
+}
+
+void osd_static_vhs(osd_surface *s, uint32_t *seed, unsigned frame)
+{
+  int band = (int)((frame * 3u) % (unsigned)(s->h + 60)) - 30;     /* tracking band rolls down */
+  for (int y = 0; y < s->h; y++) {
+    uint32_t *row = s->px + (size_t)y * (size_t)s->pitch;
+    int dist = y - band, in_band = dist > -18 && dist < 18;
+    *seed ^= *seed << 13; *seed ^= *seed >> 17; *seed ^= *seed << 5;
+    int shift = (int)(*seed % 7) - 3;                              /* line jitter */
+    int lift = in_band ? 90 - (dist < 0 ? -dist : dist) * 4 : 0;
+    for (int x = 0; x < s->w; x++) {
+      *seed ^= *seed << 13; *seed ^= *seed >> 17; *seed ^= *seed << 5;
+      int v = (int)(*seed & 0xff) * 3 / 4 + lift + ((x + shift) & 8 ? 6 : 0);
+      int r = v + (int)((*seed >> 8) & 31) - 16, b = v + (int)((*seed >> 13) & 31) - 16;   /* chroma noise */
+      if (v > 255) v = 255;
+      r = r < 0 ? 0 : r > 255 ? 255 : r;
+      b = b < 0 ? 0 : b > 255 ? 255 : b;
+      row[x] = OSD_RGB(r, v, b);
+    }
+  }
 }

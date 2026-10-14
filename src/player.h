@@ -26,6 +26,9 @@ typedef struct {
   double fps;
   int native;          /* frames arrive at PLAYER_W x PLAYER_H square-pixel: no resize */
   int bars_top, bars_left;  /* black bars detected in the stream (pixels) */
+  int naudio;               /* audio tracks in the stream */
+  int audio_cur;            /* which one plays (0-based among the audio tracks) */
+  char audio_lang[8][8];    /* their language tags ("eng", "" if none) */
 } player_info;
 
 typedef struct {
@@ -40,6 +43,8 @@ void player_destroy(player *p);
 
 /* Start tuning a URL (returns immediately; work happens on the thread). */
 int player_open(player *p, const char *url);
+/* Same, preferring the audio_track-th audio track (0-based; -1 = the best one). */
+int player_open_track(player *p, const char *url, int audio_track);
 /* Stop and join the thread. Safe to call when idle. */
 void player_close(player *p);
 
@@ -49,6 +54,9 @@ void player_get_info(player *p, player_info *info);
 /* ZOOM (1) crops the picture inside any black bars to fill 4:3; FIT (0) shows
  * the whole frame. Takes effect on the next decoded frame; kept across tunes. */
 void player_set_zoom(player *p, int zoom);
+/* Shrink the video into a margin of percent (0..20) on every side, for
+ * screens that cut off the edges. Takes effect on the next frame. */
+void player_set_margin(player *p, int percent);
 
 /* Playback stats since the last player_open (for the log and measurements). */
 void player_get_stats(player *p, player_stats *st);
