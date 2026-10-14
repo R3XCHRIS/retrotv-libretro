@@ -10,7 +10,7 @@
 
 #define REMOTE_PORT 7474
 
-typedef enum { RC_NONE, RC_HELP, RC_STATUS, RC_TUNE, RC_UP, RC_DOWN, RC_LAST, RC_BAD } remote_kind;
+typedef enum { RC_NONE, RC_PAGE, RC_HELP, RC_STATUS, RC_CHANNELS, RC_TUNE, RC_UP, RC_DOWN, RC_LAST, RC_BAD } remote_kind;
 
 typedef struct {
   remote_kind kind;
@@ -27,12 +27,25 @@ void remote_parse(const char *request, remote_cmd *c);
  * first, else as a part. -1 if nothing matches. */
 int remote_find(const m3u_list *l, const char *ch, const char *name);
 
-/* s as a JSON string, quotes included; cut to fit n. */
-void remote_json_str(char *out, size_t n, const char *s);
+/* A reply body that grows as it's written (up to REMOTE_MAX_BODY; past that,
+ * or out of memory, it's marked failed and the server answers 500). */
+#define REMOTE_MAX_BODY (1 << 20)
+typedef struct {
+  char *p;
+  size_t len, cap;
+  int failed;
+  const char *type;    /* Content-Type; NULL: JSON if the body starts with '{', else text */
+} remote_buf;
 
-/* Answer one request, on the server thread: write the JSON (or text) body
- * into body and return the HTTP status (200, 400, 404, 503). */
-typedef int (*remote_handler)(const remote_cmd *c, char *body, size_t n, void *ctx);
+void remote_puts(remote_buf *b, const char *s);
+void remote_printf(remote_buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/* s as a JSON string, quotes included (NULL gives null) */
+void remote_json(remote_buf *b, const char *s);
+void remote_buf_free(remote_buf *b);
+
+/* Answer one request, on the server thread: write the body into out and
+ * return the HTTP status (200, 400, 404, 503). */
+typedef int (*remote_handler)(const remote_cmd *c, remote_buf *out, void *ctx);
 
 /* Listen on 127.0.0.1 (lan = 0) or every interface (lan = 1). port 0 picks
  * a free one (tests). Returns 0, or an errno (port taken, ...). */

@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -78,8 +79,10 @@ void remote_parse(const char *req, remote_cmd *c)
   size_t qlen = qm ? pl - plen - 1 : 0;
   while (plen > 1 && path[plen - 1] == '/') plen--;           /* "/up/" = "/up" */
 #define IS(s) (plen == strlen(s) && !strncmp(path, s, plen))
-  if (IS("/") || IS("/help")) c->kind = RC_HELP;
+  if (IS("/")) c->kind = RC_PAGE;
+  else if (IS("/help")) c->kind = RC_HELP;
   else if (IS("/status")) c->kind = RC_STATUS;
+  else if (IS("/channels")) c->kind = RC_CHANNELS;
   else if (IS("/up")) c->kind = RC_UP;
   else if (IS("/down")) c->kind = RC_DOWN;
   else if (IS("/last")) c->kind = RC_LAST;
@@ -132,24 +135,66 @@ int remote_find(const m3u_list *l, const char *ch, const char *name)
   return -1;
 }
 
-void remote_json_str(char *out, size_t n, const char *s)
+/* ---------- reply body ---------- */
+
+static int grow(remote_buf *b, size_t more)
 {
-  if (n < 3) { if (n) out[0] = '\0'; return; }
-  size_t o = 0;
-  out[o++] = '"';
-  for (; s && *s; s++) {
+  if (b->failed) return -1;
+  if (b->len + more + 1 <= b->cap) return 0;
+  size_t cap = b->cap ? b->cap : 1024;
+  while (cap < b->len + more + 1) cap *= 2;
+  if (cap > REMOTE_MAX_BODY) { b->failed = 1; return -1; }
+  char *p = realloc(b->p, cap);
+  if (!p) { b->failed = 1; return -1; }
+  b->p = p;
+  b->cap = cap;
+  return 0;
+}
+
+static void put(remote_buf *b, const char *s, size_t n)
+{
+  if (grow(b, n)) return;
+  memcpy(b->p + b->len, s, n);
+  b->len += n;
+  b->p[b->len] = '\0';
+}
+
+void remote_puts(remote_buf *b, const char *s) { put(b, s, strlen(s)); }
+
+void remote_printf(remote_buf *b, const char *fmt, ...)
+{
+  char tmp[512];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
+  va_end(ap);
+  if (n < 0) { b->failed = 1; return; }
+  if ((size_t)n < sizeof(tmp)) { put(b, tmp, (size_t)n); return; }
+  if (grow(b, (size_t)n)) return;                     /* long: format straight into the buffer */
+  va_start(ap, fmt);
+  vsnprintf(b->p + b->len, (size_t)n + 1, fmt, ap);
+  va_end(ap);
+  b->len += (size_t)n;
+}
+
+void remote_json(remote_buf *b, const char *s)
+{
+  if (!s) { put(b, "null", 4); return; }
+  put(b, "\"", 1);
+  for (; *s; s++) {
     unsigned char c = (unsigned char)*s;
     char esc[8];
-    if (c == '"' || c == '\\') snprintf(esc, sizeof(esc), "\\%c", c);
-    else if (c < 0x20) snprintf(esc, sizeof(esc), "\\u%04x", c);
-    else { esc[0] = (char)c; esc[1] = '\0'; }
-    size_t el = strlen(esc);
-    if (o + el + 2 > n) break;                       /* keep room for the closing quote */
-    memcpy(out + o, esc, el);
-    o += el;
+    if (c == '"' || c == '\\') { esc[0] = '\\'; esc[1] = (char)c; put(b, esc, 2); }
+    else if (c < 0x20) { snprintf(esc, sizeof(esc), "\\u%04x", c); put(b, esc, 6); }
+    else put(b, (const char *)&c, 1);
   }
-  out[o++] = '"';
-  out[o] = '\0';
+  put(b, "\"", 1);
+}
+
+void remote_buf_free(remote_buf *b)
+{
+  free(b->p);
+  memset(b, 0, sizeof(*b));
 }
 
 /* ---------- server ---------- */
@@ -168,6 +213,7 @@ static const char *reason(int code)
   case 200: return "OK";
   case 400: return "Bad Request";
   case 404: return "Not Found";
+  case 500: return "Internal Server Error";
   default: return "Service Unavailable";
   }
 }
@@ -204,18 +250,24 @@ static void serve(int fd)
   if (!got) return;
   remote_cmd c;
   remote_parse(req, &c);
-  char body[1024];
-  body[0] = '\0';
-  int code = handler ? handler(&c, body, sizeof(body), handler_ctx) : 503;
-  const char *type = body[0] == '{' ? "application/json" : "text/plain; charset=utf-8";
-  char head[256];
-  size_t bl = strlen(body);
+  remote_buf body = { 0 };
+  int code = handler ? handler(&c, &body, handler_ctx) : 503;
+  if (body.failed) {
+    free(body.p);
+    memset(&body, 0, sizeof(body));
+    code = 500;
+    remote_puts(&body, "{\"ok\":false,\"error\":\"reply too large\"}");
+  }
+  const char *bp = body.p ? body.p : "";
+  const char *type = body.type ? body.type : bp[0] == '{' ? "application/json" : "text/plain; charset=utf-8";
+  char head[320];
   int hl = snprintf(head, sizeof(head),
                     "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
-                    "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                    code, reason(code), type, bl);
+                    "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+                    code, reason(code), type, body.len);
   send_all(fd, head, (size_t)hl);
-  send_all(fd, body, bl);
+  send_all(fd, bp, body.len);
+  remote_buf_free(&body);
 }
 
 static void *server_main(void *arg)
