@@ -14,6 +14,7 @@
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 
@@ -42,6 +43,8 @@
   X(avutil, av_frame_alloc)                                   \
   X(avutil, av_frame_free)                                    \
   X(avutil, av_frame_unref)                                   \
+  X(avutil, av_frame_apply_cropping)                          \
+  X(avutil, av_pix_fmt_desc_get)                              \
   X(avutil, av_dict_set)                                      \
   X(avutil, av_dict_free)                                     \
   X(avutil, av_strerror)                                      \

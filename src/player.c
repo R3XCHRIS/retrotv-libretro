@@ -1,3 +1,4 @@
+#define _GNU_SOURCE                   /* pthread_setname_np */
 #include "player.h"
 
 #include <math.h>
@@ -8,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "aspect.h"
 #include "ffapi.h"
 
 #define VQ 6                                  /* decoded video frames held */
@@ -42,8 +44,12 @@ struct player {
   /* video queue (ring) */
   vslot vq[VQ];
   int vhead, vcount;
+  atomic_int zoom;              /* 1 = crop to fill 4:3 (TV aspect button) */
+  aspect_tracker bars;          /* decode thread only */
+  long vframes;                 /* decode thread only */
   uint32_t *shown;              /* last picture handed out */
   int have_shown;
+  player_stats stats;
 
   /* audio ring */
   int16_t *aq;
@@ -108,6 +114,41 @@ static void fit_rect(const AVFrame *f, AVRational sar, int *ox, int *oy, int *ow
   *oy = (PLAYER_H - *oh) / 2;
 }
 
+/* 8-bit planar luma in plane 0 (yuv420p, nv12, ...): what aspect_bars reads. */
+static int luma8(const AVFrame *f)
+{
+  const AVPixFmtDescriptor *d = p_av_pix_fmt_desc_get((enum AVPixelFormat)f->format);
+  return d && !(d->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_HWACCEL | AV_PIX_FMT_FLAG_PAL))
+         && d->nb_components >= 3 && d->comp[0].plane == 0 && d->comp[0].depth == 8 && d->comp[0].step == 1;
+}
+
+/* Look for letterbox/pillarbox bars on every 3rd frame (cheap: sparse rows/columns). */
+static void track_bars(player *p, const AVFrame *f)
+{
+  int t, l;
+  if (p->vframes++ % 3 || !luma8(f)) return;
+  if (!aspect_bars(f->data[0], f->linesize[0], f->width, f->height, &t, &l)) return;
+  aspect_track(&p->bars, t, l);
+  pthread_mutex_lock(&p->mu);
+  p->info.bars_top = p->bars.top;
+  p->info.bars_left = p->bars.left;
+  pthread_mutex_unlock(&p->mu);
+}
+
+/* ZOOM: crop the frame to the 4:3 centre of the picture inside the bars. */
+static void zoom_crop(player *p, AVFrame *f, AVRational sar)
+{
+  int x, y, cw, ch;
+  double s = (sar.num > 0 && sar.den > 0) ? (double)sar.num / sar.den : 1.0;
+  aspect_zoom_rect(f->width, f->height, s, p->bars.top, p->bars.left, &x, &y, &cw, &ch);
+  if (cw >= f->width && ch >= f->height) return;
+  f->crop_left = (size_t)x;
+  f->crop_top = (size_t)y;
+  f->crop_right = (size_t)(f->width - x - cw);
+  f->crop_bottom = (size_t)(f->height - y - ch);
+  p_av_frame_apply_cropping(f, AV_FRAME_CROP_UNALIGNED);
+}
+
 static void push_audio(player *p, const int16_t *s, int n, double pts)
 {
   pthread_mutex_lock(&p->mu);
@@ -135,6 +176,9 @@ static void push_audio(player *p, const int16_t *s, int n, double pts)
 static void *thread_main(void *arg)
 {
   player *p = arg;
+#ifdef __linux__
+  pthread_setname_np(pthread_self(), "retrotv-dec");   /* visible in top -H / ps -L */
+#endif
   AVFormatContext *fmt = NULL;
   AVCodecContext *vdec = NULL, *adec = NULL;
   struct SwsContext *sws = NULL;
@@ -243,14 +287,27 @@ static void *thread_main(void *arg)
         if (wait_space(p, 1, 0)) break;
         int ox, oy, ow, oh;
         AVRational sar = fr->sample_aspect_ratio.num ? fr->sample_aspect_ratio : st->sample_aspect_ratio;
+        track_bars(p, fr);
+        if (atomic_load(&p->zoom)) zoom_crop(p, fr, sar);
         fit_rect(fr, sar, &ox, &oy, &ow, &oh);
+        /* Fast path for streams pre-scaled on the server (Dispatcharr output
+         * profile): same size in and out, so swscale takes its unscaled
+         * YUV->RGB converter and there are no borders to clear. */
+        int native = fr->width == PLAYER_W && fr->height == PLAYER_H && ow == PLAYER_W && oh == PLAYER_H;
         sws = p_sws_getCachedContext(sws, fr->width, fr->height, (enum AVPixelFormat)fr->format,
-                                     ow, oh, AV_PIX_FMT_BGR0, SWS_BILINEAR, NULL, NULL, NULL);
+                                     ow, oh, AV_PIX_FMT_BGR0, native ? SWS_POINT : SWS_BILINEAR, NULL, NULL, NULL);
         if (sws) {
           pthread_mutex_lock(&p->mu);
           vslot *slot = &p->vq[(p->vhead + p->vcount) % VQ];
+          p->info.native = native;
+          /* a quick re-tune can open before the stream info is known */
+          if (!p->info.width) { p->info.width = fr->width; p->info.height = fr->height; }
+          if (p->info.fps <= 0) {
+            AVRational r = st->avg_frame_rate.den ? st->avg_frame_rate : st->r_frame_rate;
+            if (r.den && r.num) p->info.fps = (double)r.num / r.den;
+          }
           pthread_mutex_unlock(&p->mu);
-          memset(slot->px, 0, (size_t)PLAYER_W * PLAYER_H * 4);
+          if (ow != PLAYER_W || oh != PLAYER_H) memset(slot->px, 0, (size_t)PLAYER_W * PLAYER_H * 4);
           uint8_t *dst[4] = { (uint8_t *)(slot->px + (size_t)oy * PLAYER_W + ox), NULL, NULL, NULL };
           int dstride[4] = { PLAYER_W * 4, 0, 0, 0 };
           p_sws_scale(sws, (const uint8_t *const *)fr->data, fr->linesize, 0, fr->height, dst, dstride);
@@ -344,6 +401,9 @@ static void reset_buffers(player *p)
   p->attempt_err[0] = '\0';
   atomic_store(&p->attempt, 0);
   memset(&p->info, 0, sizeof(p->info));
+  memset(&p->stats, 0, sizeof(p->stats));
+  aspect_track_reset(&p->bars);
+  p->vframes = 0;
 }
 
 int player_open(player *p, const char *url)
@@ -380,6 +440,15 @@ void player_close(player *p)
 player_state player_get_state(player *p) { return (player_state)atomic_load(&p->state); }
 const char *player_error(player *p) { return p->err; }
 double player_tuning_seconds(player *p) { return now_mono() - p->open_time; }
+
+void player_set_zoom(player *p, int zoom) { atomic_store(&p->zoom, zoom ? 1 : 0); }
+
+void player_get_stats(player *p, player_stats *st)
+{
+  pthread_mutex_lock(&p->mu);
+  *st = p->stats;
+  pthread_mutex_unlock(&p->mu);
+}
 
 int player_attempt(player *p, char *why, size_t n)
 {
@@ -467,6 +536,13 @@ int player_video(player *p, uint32_t *dst)
       else if (fabs(head->pts - p->clock) > 1.0) due = !advanced;   /* timestamp jump: resync, one per frame */
       else due = head->pts <= p->clock + 0.005;
       if (!due) break;
+      if (advanced) p->stats.dropped++;
+      if (p->clock_valid && !isnan(head->pts) && fabs(head->pts - p->clock) <= 1.0) {
+        double sk = fabs(p->clock - head->pts);
+        p->stats.skew_sum += sk;
+        if (sk > p->stats.skew_max) p->stats.skew_max = sk;
+      }
+      p->stats.shown++;
       /* keep the newest due frame */
       memcpy(p->shown, head->px, (size_t)PLAYER_W * PLAYER_H * 4);
       p->have_shown = 1;
