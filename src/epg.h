@@ -21,9 +21,17 @@ typedef struct {
 } epg_chan;
 
 typedef struct {
+  char *name;              /* a <display-name>, normalised (lowercase letters and digits) */
+  char *id;                /* the <channel id> it belongs to */
+} epg_alias;
+
+typedef struct {
   epg_chan *ch;            /* sorted by id */
   size_t nch;
   size_t nprog;
+  epg_alias *alias;        /* channel display names, for guides from another source */
+  size_t nalias;
+  int match_numbers;       /* channel number as id: only for the playlist's own guide (default 1) */
 } epg;
 
 /* Parse XMLTV text, keeping programmes that overlap [from, to).
@@ -33,6 +41,13 @@ void epg_free(epg *g);
 
 /* Programmes for a channel id (NULL if unknown). */
 const epg_chan *epg_find(const epg *g, const char *id);
+
+/* Programmes for a playlist channel: by tvg-id, then by name against the
+ * guide's display names (for a guide from another source, whose ids don't
+ * match the playlist), then by channel number if g->match_numbers. A guide
+ * from elsewhere numbers its channels differently, so the core turns number
+ * matching off for an epg= guide. Any argument may be NULL. */
+const epg_chan *epg_lookup(const epg *g, const char *tvg_id, const char *number, const char *tvg_name, const char *name);
 
 /* The programme on air at t and the one after it (either may be NULL). */
 void epg_now_next(const epg_chan *c, time_t t, const epg_prog **now, const epg_prog **next);

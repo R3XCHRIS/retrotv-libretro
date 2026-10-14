@@ -125,7 +125,11 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   (first line: URL or path), then `.../retrotv/channels.m3u`. No playlist → help screen.
 - State: the last channel is saved in the frontend's save directory, which ReplayOS sets to
   `<storage>/saves/<system>/` (now `saves/avtest/retrotv-last-<playlist hash>.txt`). Moving
-  slots means one fresh start. The EPG comes from the playlist's `x-tvg-url`.
+  slots means one fresh start. The EPG comes from the playlist's `x-tvg-url`, or from an
+  `epg=<URL or path>` line in playlist.txt (overrides it; `.xml.gz` unpacked with the system
+  zlib via dlopen). Matching: tvg-id, then display name, then number (own guide only).
+  Tunarr works too: use `/api/channels.m3u` (HLS streams, guide at `/api/xmltv.xml`), not
+  `/stream/channels/N.m3u8` (that's one channel's video).
 - Core options: ReplayOS accepts core options v2 and lists them in its in-game menu as
   **System Settings** (next to System Input, System Media, Replay Options), with a save
   entry; changes reach the core live (GET_VARIABLE_UPDATE).

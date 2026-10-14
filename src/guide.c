@@ -58,14 +58,17 @@ void guide_scroll(guide_view *v, size_t count)
   if (count > GUIDE_ROWS && v->top > count - GUIDE_ROWS) v->top = count - GUIDE_ROWS;
 }
 
-static const char *chan_id(const m3u_channel *c) { return c->tvg_id && *c->tvg_id ? c->tvg_id : c->number; }
+const epg_chan *guide_chan(const epg *g, const m3u_channel *c)
+{
+  return epg_lookup(g, c->tvg_id, c->number, c->tvg_name, c->name);
+}
 
 const epg_prog *guide_focus(const epg *g, const m3u_list *l, const guide_view *v, time_t now)
 {
   if (!l || v->sel >= l->count) return NULL;
   const epg_prog *p, *next;
   time_t t = now > v->t0 ? now : v->t0;
-  epg_now_next(epg_find(g, chan_id(&l->ch[v->sel])), t, &p, &next);
+  epg_now_next(guide_chan(g, &l->ch[v->sel]), t, &p, &next);
   /* paged ahead and the programme on air at the left edge is nearly over:
    * focus the next one, like a printed guide's first full listing */
   if (p && next && v->t0 > now && p->stop - v->t0 < 10 * 60) p = next;
@@ -183,7 +186,7 @@ void guide_draw(osd_surface *s, const m3u_list *l, const epg *g, const guide_vie
     osd_text_shadow(s, L + 6, y + 4, num, 2, i == playing ? GOLD : YELLOW);
     osd_text(s, L + 6, y + 24, name, 1, WHITE);
 
-    int n = guide_cells(epg_find(g, chan_id(c)), v->t0, GUIDE_SPAN, GX, GW, cells, 24);
+    int n = guide_cells(guide_chan(g, c), v->t0, GUIDE_SPAN, GX, GW, cells, 24);
     osd_fill(s, GX, y, GW, ROW_H - 2, TH->cell_gap, 255);          /* gaps: no info */
     if (!n) osd_text(s, GX + 6, y + 15, "No information", 1, DIM);
     for (int k = 0; k < n; k++) {
