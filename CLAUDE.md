@@ -12,7 +12,7 @@ The source of the streams is Dispatcharr.
 
 Status: **prototype**. It runs under our headless test frontend
 (`tests/harness.c`) and, since Oct 2026, **inside ReplayOS on the user's Pi via
-the `pibench` slot** (see "Deploying into ReplayOS" below).
+the `avtest` slot** (Extra → audio_video_test; see "Deploying into ReplayOS" below).
 
 ## Verified facts about the target (checked on the real Pi, Oct 2026)
 
@@ -62,7 +62,10 @@ features are configured in Dispatcharr and selected through the playlist URL:
   the EPG link `/output/epg/<profile>` arrives as `x-tvg-url` in the M3U header).
 - **Output Profile** = an ffmpeg pre-transcode (`pipe:0` → MPEG-TS `pipe:1`) that crops
   and downscales to 640x480 on the server. It's selected with `?output_profile=<id>` on the
-  M3U link (exists in v0.32.0; `core.models.OutputProfile`).
+  M3U link (exists in v0.32.0; `core.models.OutputProfile`). **Not used by default:** the
+  user's Dispatcharr already transcodes every stream with a VAAPI stream profile, so this
+  would be a second transcode (slower tunes). The deployed playlist is the direct link.
+  A wrong or inactive id silently falls back to passthrough: verify with ffprobe.
 - Use the Dispatcharr REST API only for things the M3U can't do (e.g. resetting a stuck
   channel), and only behind a token kept out of the repo.
 
@@ -93,27 +96,36 @@ freezing.
 - Never commit playlists, stream URLs, tokens or screenshots of private channels.
 - Keep `make test` and `make check` passing (CI runs both and the cross-build).
 
-## Deploying into ReplayOS (pibench slot — installed on the user's Pi)
+## Deploying into ReplayOS (avtest slot — installed on the user's Pi)
 
 ReplayOS has a hardcoded system list and `_extra` only accepts `.lr`/`.sh`, so
-RetroTV borrows the **`[pibench]`** slot (Extra → pibench). Verified working on
-ReplayOS 2.0.60: launched from the menu, 29 channels, ~5.8 s cold tune.
+RetroTV borrows the **`[avtest]`** slot (Extra → audio_video_test). Verified on
+ReplayOS 2.0.60 (Oct 2026), with sound.
+
+- **Don't use `[pibench]`: ReplayOS mutes that slot.** The core's audio is accepted
+  (`av_enable=3`, every frame taken) but nothing reaches the speaker; the same core
+  in `[avtest]` has sound. Older installs used pibench; the installer gives it back.
+- No new Extras entry is possible: `pibench.lr`/`audio_video_test.lr` are hardcoded,
+  and `/api/v1/load_game` rejects those special systems ("Invalid system").
+- ReplayOS keeps `replay.cfg` in memory and writes it on shutdown: never edit it while
+  `replay.service` runs (the edit gets overwritten). Change settings from its menu.
+  If storage silently falls back to `sd`, the systems list empties; reset it in the menu.
 
 - `replayos/retrotv_install.sh` (in `<storage>/roms/_extra/`, runs as root from
   the Extra menu or SSH): copies `<storage>/retrotv/retrotv_libretro.so` to
-  `/opt/replay/cores/`, rewrites only `[pibench]` low/mid/hi, backs up
+  `/opt/replay/cores/`, rewrites only `[avtest]` low/mid/hi (and gives `[pibench]`
+  back if an older install took it), backs up
   `cores.cfg` to `<storage>/retrotv/backup/` and `cores.cfg.pre-retrotv`,
   restarts `replay.service`. Re-run after every ReplayOS update (A/B system
   slot replaces `/opt/replay`).
-- `replayos/retrotv_uninstall.sh` restores `[pibench]` and removes the core.
+- `replayos/retrotv_uninstall.sh` restores `[avtest]` (and `[pibench]`) and removes the core.
 - Storage backups use plain `cp`: the NFS share squashes root, so `cp -p` fails.
-- ReplayOS launches the core with `/media/sd/roms/_extra/pibench.lr` (even with
-  NFS storage). The core then finds its playlist in this order: launched
+- ReplayOS launches the core with `<storage>/roms/_extra/audio_video_test.lr`. The core then finds its playlist in this order: launched
   `.m3u`, first line of the launched file, `/media/{nfs,usb,nvme,sd}/retrotv/playlist.txt`
   (first line: URL or path), then `.../retrotv/channels.m3u`. No playlist → help screen.
 - Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
   and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
-  `/media/sd/captures/pibench/`.
+  `/media/sd/captures/<system>/`. `get_info` reports the display refresh (50/60 Hz).
 - Update flow: CI artifact `retrotv-aarch64` → `<storage>/retrotv/` → re-run the installer.
 - The long-term fix is an official "user cores" hook from the ReplayOS author.
 

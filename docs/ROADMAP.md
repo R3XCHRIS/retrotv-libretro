@@ -13,22 +13,66 @@ Dispatcharr (v0.32.0 here) can already serve a channel subset and pre-transcoded
 streams through its normal M3U link. RetroTV keeps reading plain M3U + XMLTV;
 no Dispatcharr API client is needed for this.
 
-- [ ] **Channel subset:** a Dispatcharr *Channel Profile* (e.g. "RetroTV") with only the
+**Outcome (Oct 2026): the direct playlist (`/output/m3u/<profile>`, no output profile) is the
+default.** This Dispatcharr already runs every stream through a VAAPI *stream* profile, so an
+output profile would be a second transcode in a row: slower tuning, lower quality, more load
+on the server. The Pi handles the original streams fine (about 27% of one core, no drops), and
+zoom, 50 Hz and loudness are done in the core. The output profiles below stay documented as an
+option for servers that pass streams through untouched or for a weaker client.
+
+- [x] **Channel subset:** a Dispatcharr *Channel Profile* (e.g. "RetroTV") with only the
   channels to flip through. Its link is `/output/m3u/<profile>` and the EPG is `/output/epg/<profile>`.
-- [ ] **Crop/downscale before the Pi:** a Dispatcharr *Output Profile* (Settings → Output
+- [x] **Crop/downscale before the Pi:** a Dispatcharr *Output Profile* (Settings → Output
   Profiles; ffmpeg reading `pipe:0`, writing MPEG-TS to `pipe:1`), selected with
   `?output_profile=<id>` on the M3U link. Dispatcharr then appends it to every
   `/proxy/ts/stream/<uuid>` URL. One transcode runs per active channel and is shared by all clients.
-  Starting point (4:3 centre crop to 640x480, stereo 48 kHz AAC):
-  `-i pipe:0 -map 0:v:0 -map 0:a:0? -vf "crop='min(iw,ih*4/3)':ih,scale=640:480,setsar=1" -c:v libx264 -preset veryfast -tune zerolatency -g 50 -b:v 1500k -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
-  Also make a "fit" variant that pads instead of cropping, for channels where the sides matter.
-- [ ] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>`
-- [ ] Core: fast path when a frame is already 640x480 square-pixel (skip sws scaling; just a copy)
-- [ ] Measure on the Pi, direct versus transcoded: tune time (expect +0.5–1.5 s for ffmpeg
-  start and the first keyframe), `retro_run` and decode-thread CPU, and A/V sync
-- [ ] Try hardware encode on Yoda (VAAPI) if the CPU cost of several transcodes is too high.
+  Parameters (dry-run tested from the Mac on live channels; 640x480 SAR 1:1, source fps kept,
+  stereo 48 kHz AAC, a keyframe every second so joining a running transcode is quick):
+  - **crop** (fills the screen, loses the sides of 16:9):
+    `-i pipe:0 -map 0:v:0 -map 0:a:0? -vf "scale='trunc(iw*sar/2)*2':ih,setsar=1,crop='min(iw,ih*4/3)':ih,scale=640:480,setsar=1" -c:v libx264 -preset veryfast -tune zerolatency -force_key_frames "expr:gte(t,n_forced*1)" -b:v 1500k -maxrate 1800k -bufsize 1500k -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
+  - **fit** (letterboxes, keeps the whole picture): same, with
+    `-vf "scale='trunc(iw*sar/2)*2':ih,setsar=1,scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,setsar=1"`
+  - The first `scale=...*sar` makes pixels square before cropping. Without it, anamorphic
+    sources (seen: 1280x720 with SAR 405:539, a 4:3 picture) get cropped in storage pixels and come out stretched.
+  - Sources seen: 1920x1080/1280x720/960x720/640x480/640x464/1920x824, 23.976–50 fps, mostly AC-3 5.1 (one 44.1 kHz).
+- [x] `playlist.txt` = `http://<dispatcharr>:9191/output/m3u/<profile>?output_profile=<id>` works (tested with the VAAPI fit profile),
+  but the deployed playlist is the direct link (see Outcome above)
+- [x] Core: fast path when a frame is already 640x480 square-pixel (no resize, no border clear; the
+  YUV->RGB conversion still runs because decoders output YUV)
+- [x] Measure on the Pi, direct versus transcoded (Oct 2026, below)
+- [x] Hardware encode on Yoda (VAAPI): the cheapest output profile if one is used, see the measurements below.
   Don't use `-fflags +discardcorrupt` (it starves the VAAPI decoder).
-- [ ] Optional: let the output profile also set the frame rate (e.g. `fps=50` for PAL) once M2's 50 Hz option exists
+- [x] ~~Let the output profile set the frame rate~~ — not needed: the core now switches the output to 50 Hz itself
+
+### M1a measurements (Pi 5, harness, Oct 2026)
+
+Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU from
+`scripts/cpu-summary.py`, % of one core, the Pi 5 has 400%). Sources: 640x480p24 AAC,
+1080p25 AC-3 5.1, 1280x720p24 anamorphic AC-3, 1080p50 AC-3, 720p25 AC-3. Transcoded = output profile "fit" (libx264).
+
+| | Direct (default) | Fit, libx264 | Fit, VAAPI |
+|---|---|---|---|
+| Tune to picture, first visit | 2.8 / 4.0 / 5.2 / 14.6 s, one >16 s | 3.2 / 4.0 / 7.4 / 11.3 s, one >16 s | 3.3 / 4.2 / 4.8 / 12.0 / 13.9 s |
+| Tune to picture, revisit after 10–20 s | 4.0–4.3 s | 4.0–4.9 s | 4.0–5.3 s |
+| `retro_run` worst per second (median / p95 / max) | 1.7 / 3.7 / 23 ms | 1.5 / 2.4 / 21 ms | 1.8 / 2.5 / 2.7 ms |
+| Process CPU (avg / peak) | 26.6% / 78% | **10.8% / 22%** | **11.4% / 22%** |
+| `retrotv-dec` + FFmpeg decoder threads (avg) | 6.6% + 12.0% | **1.1% + 1.9%** | **1.2% + 2.4%** |
+| Peak threads | 7 | 7 | 7 |
+| A/V skew (avg / max) | 4.6–6.2 / 12 ms | 4.4–5.3 / 12 ms | 4.4–5.6 / 12 ms |
+| Dropped frames | 0 | 0 | 0 |
+| Yoda CPU per transcode (% of one N100 core) | – | 30–60% SD/720p, 130–190% 1080p50 | 20–40% SD/720p, 33–59% 1080p50 |
+
+- Tune time is dominated by Dispatcharr's upstream connection (2.7–13 s cold, variable run to
+  run); the transcode adds about 0.1–0.7 s, and its first keyframe arrives with its first byte.
+  The ">16 s" channel stalled upstream in both runs (in the transcoded run its ffmpeg sat at 0% CPU).
+- There is no "warm" tune here: Dispatcharr's `channel_shutdown_delay` is 0 (default), so a channel stops
+  when RetroTV leaves it. A second profile on a still-running channel started in 0.17 s.
+- The banner and log show `640x480 h264 ... aac, native` for every transcoded channel (fast path on).
+- Cost moves to Yoda (Intel N100, 4 cores): one libx264 transcode is 30–60% of a core for SD/720p and
+  130–190% for 1080p50. A full-GPU VAAPI pipeline on the same 1080p50 channel used **3.5x less CPU**
+  (7.5 s vs 26.7 s CPU for 22 s of stream) with the same geometry:
+  `-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -i pipe:0 -map 0:v:0 -map 0:a:0? -vf "scale_vaapi=w='trunc(iw*sar/2)*2':h=ih,scale_vaapi=w=640:h=480:force_original_aspect_ratio=decrease,pad_vaapi=w=640:h=480:x=(ow-iw)/2:y=(oh-ih)/2,setsar=1" -c:v h264_vaapi -rc_mode VBR -b:v 1500k -maxrate 1800k -bf 0 -force_key_frames "expr:gte(t,n_forced*1)" -c:a aac -ac 2 -ar 48000 -b:a 128k -f mpegts pipe:1`
+  (the Dispatcharr container already has `/dev/dri` and FFmpeg 8.1 with `h264_vaapi`/`pad_vaapi`).
 
 ## Later — Dispatcharr API (only where M3U/XMLTV can't help)
 - [ ] When a channel stays stuck after retries, ask Dispatcharr to reset it
@@ -47,8 +91,13 @@ no Dispatcharr API client is needed for this.
 - [ ] Channel logos in the banner (fetched and cached as PNG/JPEG, decoded with FFmpeg)
 
 ## M2 — Options and QoL (libretro core options)
+- [x] Zoom button (pad Y): FIT letterboxes, ZOOM crops the picture inside detected bars to fill 4:3
+- [x] Loudness: AGC to about -18 dBFS (gain -6..+18 dB, fast down/slow up) plus a soft limiter;
+  channels measured from -13 to -39 dBFS, so a fixed boost distorted loud ones
+- [ ] Remember zoom per channel; loudness as an option
 - [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
-- [ ] Refresh: 60 / 59.94 / 50 Hz, ideally following the stream (e.g. a 50 fps PAL channel judders at 60 Hz)
+- [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
+- [ ] Option to pin 60 Hz (or 59.94) for displays that don't like mode changes
 - [ ] Static style: off / classic / VHS; channel-change "blip" sound on or off
 - [ ] Banner timeout, clock 12h/24h, colour theme (Cable Navy, Teletext, Green Phosphor)
 - [ ] Sleep timer ("SLEEP 30")
@@ -62,7 +111,8 @@ no Dispatcharr API client is needed for this.
 - [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
 ## M3 — Into ReplayOS
-- [x] Interim path: borrow the `pibench` slot (Extra → pibench), verified on 2.0.60
+- [x] Interim path: borrow a slot. `pibench` turned out to be muted by ReplayOS; now `avtest`
+      (Extra → audio_video_test), with sound, verified on 2.0.60
 - [x] Installer and uninstaller with backups (`replayos/`)
 - [ ] Ask the ReplayOS author for an official user-core hook
 - [ ] Check what a ReplayOS update does to the install (expect: re-run the installer)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RetroTV for ReplayOS - install into the "pibench" slot.
+# RetroTV for ReplayOS - install into the "avtest" slot (Extra > audio_video_test).
 #
 # Put this file in <storage>/roms/_extra/ and run it from the ReplayOS
 # Extra menu (or over SSH as root). Re-run it after every ReplayOS update:
@@ -10,14 +10,18 @@
 #
 # What it changes (with backups):
 #   /opt/replay/cores/retrotv_libretro.so      added
-#   /opt/replay/cores/cores.cfg [pibench]      low/mid/hi -> retrotv_libretro.so
-# pibench_libretro.so itself is left untouched; the uninstaller restores the slot.
+#   /opt/replay/cores/cores.cfg [avtest]       low/mid/hi -> retrotv_libretro.so
+#   /opt/replay/cores/cores.cfg [pibench]      back to pibench_libretro.so if an
+#                                              older RetroTV install had taken it
+# avtest_libretro.so itself is left untouched; the uninstaller restores the slot.
+# Why avtest: ReplayOS mutes the pibench slot (no audio there), and it can't
+# add new systems, so RetroTV borrows the A/V test pattern's slot.
 set -euo pipefail
 [[ "${1:-}" == "NULL" ]] && shift   # ReplayOS passes NULL when launched from the menu
 
 CORES=/opt/replay/cores
 CFG=$CORES/cores.cfg
-SLOT=pibench
+SLOT=avtest
 NOW=$(date +%Y%m%d-%H%M%S)
 
 say() { echo "[retrotv] $*"; }
@@ -51,17 +55,27 @@ install -m 0644 "$SRC" "$CORES/retrotv_libretro.so.new"
 mv -f "$CORES/retrotv_libretro.so.new" "$CORES/retrotv_libretro.so"
 say "installed $CORES/retrotv_libretro.so"
 
-tmp=$(mktemp)
-awk -v slot="[$SLOT]" '
-  /^\[/ { insec = ($0 == slot) }
-  insec && /^(low|mid|hi)[[:space:]]*=/ { split($0, kv, "="); gsub(/[[:space:]]/, "", kv[1]); print kv[1] " = \"retrotv_libretro.so\""; next }
-  { print }' "$CFG" >"$tmp"
-cat "$tmp" >"$CFG"
-rm -f "$tmp"
+# point a slot's low/mid/hi at a core
+set_slot() {
+  local tmp
+  tmp=$(mktemp)
+  awk -v slot="[$1]" -v core="$2" '
+    /^\[/ { insec = ($0 == slot) }
+    insec && /^(low|mid|hi)[[:space:]]*=/ { split($0, kv, "="); gsub(/[[:space:]]/, "", kv[1]); print kv[1] " = \"" core "\""; next }
+    { print }' "$CFG" >"$tmp"
+  cat "$tmp" >"$CFG"
+  rm -f "$tmp"
+}
+
+if awk '/^\[/{insec=($0=="[pibench]")} insec && /retrotv_libretro\.so/' "$CFG" | grep -q .; then
+  set_slot pibench pibench_libretro.so
+  say "[pibench] given back to PiBench (older RetroTV install)"
+fi
+set_slot "$SLOT" retrotv_libretro.so
 n=$(awk -v slot="[$SLOT]" '/^\[/{insec=($0==slot)} insec && /retrotv_libretro\.so/' "$CFG" | wc -l)
 [[ $n -eq 3 ]] || { cat "$STORAGE/retrotv/backup/cores.cfg.$NOW" >"$CFG"; die "cores.cfg edit failed - restored backup"; }
 say "[$SLOT] now launches RetroTV"
 
 [[ -f "$STORAGE/retrotv/playlist.txt" ]] || say "NOTE: add your M3U URL to $STORAGE/retrotv/playlist.txt"
-say "done - restarting ReplayOS in 3 s. Then open Extra > pibench."
+say "done - restarting ReplayOS in 3 s. Then open Extra > audio_video_test."
 ( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &

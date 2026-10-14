@@ -26,6 +26,7 @@ static int nact;
 static unsigned fb_w, fb_h;
 static uint32_t *frame, *last;
 static double t_run;
+static double fps = 60;          /* current refresh; the core may switch it */
 static int held_button = -1;
 static double held_until;
 
@@ -54,6 +55,12 @@ static bool env(unsigned cmd, void *data)
     return *(enum retro_pixel_format *)data == RETRO_PIXEL_FORMAT_XRGB8888;
   case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     return true;
+  case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
+    const struct retro_system_av_info *av = data;
+    printf("  [%6.2fs] refresh %.2f -> %.2f fps\n", t_run, fps, av->timing.fps);
+    fps = av->timing.fps;
+    return true;
+  }
   default:
     return false;
   }
@@ -104,6 +111,7 @@ static int button_id(const char *w)
     {"l", RETRO_DEVICE_ID_JOYPAD_L}, {"r", RETRO_DEVICE_ID_JOYPAD_R},
     {"a", RETRO_DEVICE_ID_JOYPAD_A}, {"b", RETRO_DEVICE_ID_JOYPAD_B},
     {"select", RETRO_DEVICE_ID_JOYPAD_SELECT}, {"start", RETRO_DEVICE_ID_JOYPAD_START},
+    {"x", RETRO_DEVICE_ID_JOYPAD_X}, {"y", RETRO_DEVICE_ID_JOYPAD_Y},
   };
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); i++) if (!strcmp(m[i].n, w)) return m[i].id;
   return -1;
@@ -243,13 +251,12 @@ int main(int argc, char **argv)
   retro_get_system_av_info(&av);
   printf("av: %ux%u @ %.2f fps, %.0f Hz\n", av.geometry.base_width, av.geometry.base_height, av.timing.fps, av.timing.sample_rate);
 
-  double fps = av.timing.fps;
+  fps = av.timing.fps;
   struct timespec start;
   clock_gettime(CLOCK_MONOTONIC, &start);
-  long nframes = (long)(seconds * fps);
   double late_max = 0;
-  for (long i = 0; i < nframes; i++) {
-    t_run = i / fps;
+  long next_report = 1;
+  for (t_run = 0; t_run < seconds; ) {
     for (int k = 0; k < nact; k++) {
       if (act[k].done || t_run < act[k].at) continue;
       act[k].done = 1;
@@ -272,20 +279,31 @@ int main(int argc, char **argv)
       snprintf(path, sizeof(path), "%s/shot_%05.1f.png", outdir, act[k].at);
       if (frame && !write_png(path, frame, fb_w, fb_h)) printf("  [%6.2fs] saved %s\n", t_run, path);
     }
-    if ((i + 1) % (long)fps == 0) {
+    t_run += 1.0 / fps;           /* advance by the refresh this frame ran at */
+    if (t_run + 1e-9 >= next_report) {
       double rms = audio_n ? sqrt(audio_sumsq / audio_n) : 0;
-      printf("  t=%3lds audio_rms=%6.0f motion=%5.1f%% worst_run=%.1fms threads=%d\n",
-             (i + 1) / (long)fps, rms, motion_frames ? 100 * motion_sum / motion_frames : 0, late_max * 1000,
-             thread_count());
+      printf("  t=%3lds audio_rms=%6.0f motion=%5.1f%% worst_run=%.1fms threads=%d fps=%.0f\n",
+             next_report, rms, motion_frames ? 100 * motion_sum / motion_frames : 0, late_max * 1000,
+             thread_count(), fps);
+      next_report++;
       audio_sumsq = 0; audio_n = 0; motion_sum = 0; motion_frames = 0; late_max = 0;
     }
     /* real-time pacing: live streams arrive at 1x */
     struct timespec due = start;
-    double target = (i + 1) / fps;
+    double target = t_run;
     due.tv_sec += (time_t)target;
     due.tv_nsec += (long)((target - floor(target)) * 1e9);
     if (due.tv_nsec >= 1000000000L) { due.tv_sec++; due.tv_nsec -= 1000000000L; }
+#ifdef TIMER_ABSTIME
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &due, NULL);
+#else /* macOS: no clock_nanosleep; sleep the remainder (host `make check` only) */
+    struct timespec now, rem;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    rem.tv_sec = due.tv_sec - now.tv_sec;
+    rem.tv_nsec = due.tv_nsec - now.tv_nsec;
+    if (rem.tv_nsec < 0) { rem.tv_sec--; rem.tv_nsec += 1000000000L; }
+    if (rem.tv_sec >= 0) nanosleep(&rem, NULL);
+#endif
   }
   retro_unload_game();
   retro_deinit();

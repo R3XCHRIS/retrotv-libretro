@@ -10,16 +10,18 @@
 
 #include "libretro.h"
 #include "ffapi.h"
+#include "loud.h"
 #include "m3u.h"
 #include "osd.h"
 #include "player.h"
 
 #define RETROTV_VERSION "0.1.0"
-#define FPS_INT 60
-#define FPS ((double)FPS_INT)
-#define AFRAMES ((size_t)(PLAYER_RATE / FPS_INT)) /* 800 stereo frames per run */
-_Static_assert(PLAYER_RATE % FPS_INT == 0, "audio frames per video frame must be whole");
+/* Output refresh: 60 Hz, or 50 Hz while a 25/50 fps (PAL) channel plays so
+ * every frame is held equally long. Audio frames per run follow the rate. */
+#define AFRAMES_MAX ((size_t)(PLAYER_RATE / 50))   /* 960 stereo frames per run at 50 Hz */
+_Static_assert(PLAYER_RATE % 50 == 0 && PLAYER_RATE % 60 == 0, "audio frames per video frame must be whole");
 #define BANNER_SECONDS 4.0
+#define TOAST_SECONDS 2.0
 
 static retro_environment_t env_cb;
 static retro_video_refresh_t video_cb;
@@ -32,10 +34,19 @@ static retro_log_printf_t log_cb;
 static m3u_list chans;
 static player *pl;
 static uint32_t fb[PLAYER_W * PLAYER_H];
-static int16_t abuf[AFRAMES * 2];
+static int16_t abuf[AFRAMES_MAX * 2];
 static size_t cur, prev;
 static double banner_until;
 static uint64_t frame_no;
+static double fps_out = 60.0;      /* current refresh */
+static double t_clock;             /* seconds of output since load */
+static int refresh_refused;        /* frontend said no to SET_SYSTEM_AV_INFO */
+static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
+static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
+static int audio_logged;
+static loud_state loud;            /* AGC on programme audio */
+static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
+static double toast_until;
 static uint32_t noise_seed = 12345;
 static int list_open;
 static size_t list_cursor;
@@ -67,11 +78,26 @@ static void logf_(enum retro_log_level lvl, const char *fmt, ...)
   }
 }
 
-static double t_now(void) { return (double)frame_no / FPS; }
+static double t_now(void) { return t_clock; }
+static size_t aframes(void) { return (size_t)(PLAYER_RATE / fps_out); }
+
+/* One line per channel visit: frames shown and dropped, A/V skew. */
+static void log_stats(void)
+{
+  player_stats st;
+  if (!pl || !chans.count || !logged_playing) return;
+  player_get_stats(pl, &st);
+  long counted = st.shown - st.dropped;
+  logf_(RETRO_LOG_INFO, "ch %s stats: %ld frames shown, %ld dropped, A/V skew avg %.1f ms max %.1f ms, audio gain %+.1f dB",
+        chans.ch[cur].number, counted, st.dropped,
+        st.shown ? 1000.0 * st.skew_sum / st.shown : 0.0, 1000.0 * st.skew_max,
+        loud.gain > 0 ? 20.0 * log10(loud.gain) : 0.0);
+}
 
 static void tune(size_t idx)
 {
   if (!chans.count) return;
+  log_stats();
   idx %= chans.count;
   if (idx != cur) prev = cur;
   cur = idx;
@@ -79,6 +105,7 @@ static void tune(size_t idx)
   logged_playing = logged_error = 0;
   logged_attempt = 1;
   logf_(RETRO_LOG_INFO, "tune ch %s \"%s\"", chans.ch[cur].number, chans.ch[cur].name);
+  loud_reset(&loud);
   player_open(pl, chans.ch[cur].url);
 }
 
@@ -143,7 +170,7 @@ static void draw_banner(osd_surface *s, player_state st)
   int maxc = (bx + bw - 14 - nx) / 8;                 /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
   osd_text(s, nx, by + 66, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
-  osd_text(s, nx, by + 82, "UP/DN CH  B LAST  A INFO  SELECT LIST", 1, OSD_RGB(130, 130, 160));
+  osd_text(s, nx, by + 82, "UP/DN CH  A INFO  B LAST  Y ZOOM  SELECT LIST", 1, OSD_RGB(130, 130, 160));
 }
 
 static void draw_list(osd_surface *s)
@@ -309,6 +336,59 @@ static int load_playlist(const char *src)
   return 0;
 }
 
+/* ---------- audio ---------- */
+
+/* Hand this run's audio to the frontend; once, after 10 s, log how much it
+ * took and whether it reports audio as enabled (diagnostics for frontends
+ * that stay silent). */
+static void send_audio(void)
+{
+  size_t n = aframes();
+  audio_sent += n;
+  audio_taken += audio_batch_cb(abuf, n);
+  if (!audio_logged && t_now() > 10.0) {
+    int av = -1;
+    if (!env_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av)) av = -1;
+    int peak = 0;
+    for (size_t i = 0; i < n * 2; i++) if (abs(abuf[i]) > peak) peak = abs(abuf[i]);
+    logf_(RETRO_LOG_INFO, "audio: frontend took %llu of %llu frames; av_enable=%d (2 = audio on, 8 = hard-disabled, -1 = not supported); last peak %d",
+          (unsigned long long)audio_taken, (unsigned long long)audio_sent, av, peak);
+    audio_logged = 1;
+  }
+}
+
+/* ---------- refresh and aspect ---------- */
+
+static void draw_toast(osd_surface *s)
+{
+  osd_text_shadow(s, 48, 40, toast, 4, OSD_RGB(80, 255, 80));
+}
+
+static void show_toast(const char *t)
+{
+  snprintf(toast, sizeof(toast), "%s", t);
+  toast_until = t_now() + TOAST_SECONDS;
+}
+
+/* Ask the frontend for 50 Hz on 25/50 fps channels and 60 Hz otherwise. */
+static void follow_refresh(double stream_fps)
+{
+  if (refresh_refused || stream_fps <= 0) return;
+  double want = (fabs(stream_fps - 25.0) < 0.6 || fabs(stream_fps - 50.0) < 1.0) ? 50.0 : 60.0;
+  if (want == fps_out) return;
+  double was = fps_out;
+  fps_out = want;
+  struct retro_system_av_info av;
+  retro_get_system_av_info(&av);
+  if (!env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av)) {
+    fps_out = was;
+    refresh_refused = 1;
+    logf_(RETRO_LOG_WARN, "frontend refused %.0f Hz; staying at %.0f Hz", want, was);
+    return;
+  }
+  logf_(RETRO_LOG_INFO, "refresh %.0f Hz -> %.0f Hz for a %.2f fps stream", was, want, stream_fps);
+}
+
 /* ---------- input ---------- */
 
 static uint16_t read_pad(void)
@@ -317,7 +397,8 @@ static uint16_t read_pad(void)
   static const unsigned ids[] = {
     RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_A,
     RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L,
-    RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START,
+    RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_X,
+    RETRO_DEVICE_ID_JOYPAD_Y,
   };
   for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
     if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, ids[i])) m |= (uint16_t)(1u << ids[i]);
@@ -330,19 +411,36 @@ static void handle_input(void)
   uint16_t down = pad & (uint16_t)~pad_prev;
   pad_prev = pad;
 #define PRESSED(id) (down & (1u << RETRO_DEVICE_ID_JOYPAD_##id))
+/* Face buttons by the label on an Xbox-style pad. ReplayOS maps pads by
+ * position (libretro's SNES layout), so the bottom button "A" arrives as
+ * JOYPAD_B, right "B" as JOYPAD_A, left "X" as JOYPAD_Y and top "Y" as JOYPAD_X. */
+#define PAD_A B
+#define PAD_B A
+#define PAD_Y X
+#define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
   if (!chans.count) return;
   if (list_open) {
     if (PRESSED(UP))   list_cursor = list_cursor ? list_cursor - 1 : chans.count - 1;
     if (PRESSED(DOWN)) list_cursor = (list_cursor + 1) % chans.count;
-    if (PRESSED(A))    { list_open = 0; tune(list_cursor); }
-    if (PRESSED(B) || PRESSED(SELECT)) list_open = 0;
+    if (FACE(PAD_A))   { list_open = 0; tune(list_cursor); }
+    if (FACE(PAD_B) || PRESSED(SELECT)) list_open = 0;
     return;
   }
   if (PRESSED(UP) || PRESSED(R))   tune((cur + 1) % chans.count);
   if (PRESSED(DOWN) || PRESSED(L)) tune(cur ? cur - 1 : chans.count - 1);
-  if (PRESSED(B))      tune(prev);
-  if (PRESSED(A))      banner_until = t_now() + BANNER_SECONDS;
+  if (FACE(PAD_B))     tune(prev);
+  if (FACE(PAD_A))     banner_until = t_now() + BANNER_SECONDS;
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
+  if (FACE(PAD_Y)) {
+    zoom = !zoom;
+    player_set_zoom(pl, zoom);
+    show_toast(zoom ? "ZOOM" : "FIT");
+    logf_(RETRO_LOG_INFO, "aspect %s", zoom ? "zoom" : "fit");
+  }
+#undef FACE
+#undef PAD_A
+#undef PAD_B
+#undef PAD_Y
 #undef PRESSED
 }
 
@@ -382,11 +480,11 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info)
   info->geometry.max_width = PLAYER_W;
   info->geometry.max_height = PLAYER_H;
   info->geometry.aspect_ratio = 4.0f / 3.0f;
-  info->timing.fps = FPS;
+  info->timing.fps = fps_out;
   info->timing.sample_rate = PLAYER_RATE;
 }
 
-RETRO_API void retro_init(void) { frame_no = 0; }
+RETRO_API void retro_init(void) { frame_no = 0; t_clock = 0; fps_out = 60.0; }
 RETRO_API void retro_deinit(void) {}
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device) { (void)port; (void)device; }
 RETRO_API void retro_reset(void) { tune(cur); }
@@ -426,6 +524,7 @@ RETRO_API bool retro_load_game_special(unsigned t, const struct retro_game_info 
 
 RETRO_API void retro_unload_game(void)
 {
+  log_stats();
   if (pl) { player_destroy(pl); pl = NULL; }
   m3u_free(&chans);
 }
@@ -440,13 +539,15 @@ RETRO_API void retro_run(void)
     draw_help(&hs);
     memset(abuf, 0, sizeof(abuf));
     video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
-    audio_batch_cb(abuf, AFRAMES);
+    audio_batch_cb(abuf, aframes());
     frame_no++;
+    t_clock += 1.0 / fps_out;
     return;
   }
 
   player_state st = player_get_state(pl);
-  player_audio(pl, abuf, AFRAMES, 1.0 / FPS);
+  player_audio(pl, abuf, aframes(), 1.0 / fps_out);
+  loud_process(&loud, abuf, aframes(), PLAYER_RATE);   /* even out channel loudness */
   st = player_get_state(pl);
   char why[160];
   int att = player_attempt(pl, why, sizeof(why));
@@ -459,9 +560,13 @@ RETRO_API void retro_run(void)
     logged_error = 1;
   }
   if (st == PLAYER_PLAYING && !logged_playing) {
-    logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs", chans.ch[cur].number, player_tuning_seconds(pl));
+    player_info in;
+    player_get_info(pl, &in);
+    logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs (%dx%d %s %.2ffps %s%s)", chans.ch[cur].number,
+          player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
     logged_playing = 1;
     banner_until = t_now() + BANNER_SECONDS;     /* show what came on */
+    follow_refresh(in.fps);
   }
 
   osd_surface s = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
@@ -471,9 +576,9 @@ RETRO_API void retro_run(void)
   } else if (st != PLAYER_PLAYING && !have) {
     osd_static(&s, &noise_seed);
     /* quiet hiss while tuning */
-    for (size_t i = 0; i < AFRAMES; i++) {
+    for (size_t i = 0; i < aframes(); i++) {
       noise_seed ^= noise_seed << 13; noise_seed ^= noise_seed >> 17; noise_seed ^= noise_seed << 5;
-      int16_t v = (int16_t)((int)(noise_seed & 0x7ff) - 0x400);
+      int16_t v = (int16_t)((int)(noise_seed & 0x1fff) - 0x1000);   /* about -23 dBFS, fixed (no AGC) */
       abuf[2 * i] = abuf[2 * i + 1] = v;
     }
   }
@@ -482,9 +587,12 @@ RETRO_API void retro_run(void)
   if (list_open) draw_list(&s);
   else if (show_banner) draw_banner(&s, st);
 
+  if (t_now() < toast_until) draw_toast(&s);
+
   video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
-  audio_batch_cb(abuf, AFRAMES);
+  send_audio();
   frame_no++;
+  t_clock += 1.0 / fps_out;
 }
 
 RETRO_API size_t retro_serialize_size(void) { return 0; }
