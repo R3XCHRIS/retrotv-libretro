@@ -126,6 +126,10 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] One-time welcome screen with the controls (remembered next to the last-channel file)
 - [x] Installer creates a commented `retrotv/playlist.txt` template when there is none
 
+## Release
+- [x] One-line installer (`install.sh`), GitHub Release workflow with checksums, Extras update item
+- [x] README with screenshots from the demo line-up
+
 ## Known issues (from Pi testing)
 - [x] Channel change blocked `retro_run` while the old stream closed (up to ~99 ms seen): now closed on a
   background reaper thread; 20 channel changes in 10 s on the Pi kept `retro_run` at 6 ms or less
