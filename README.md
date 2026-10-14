@@ -25,7 +25,7 @@ Button names are the labels on an Xbox-style pad (ReplayOS maps pads by position
 | Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM), remembered per channel |
 | Select | Channel list (Up/Down, A to tune, B to close) |
 | Start | TV guide (Up/Down channel, Left/Right 30 min, A to watch, B or Start to close) |
-| X | Menu: sleep timer, audio track, Fit/Zoom, test card, show controls |
+| X | Menu: sleep timer, audio track, volume leveller (for now; the saved default is in System Settings), Fit/Zoom, test card, show controls |
 
 ## Install on ReplayOS (borrows the A/V test slot)
 
