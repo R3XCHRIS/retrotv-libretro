@@ -35,6 +35,14 @@ ReplayOS can't add new systems yet, so RetroTV takes over **Extra → audio_vide
 
 1. Copy `retrotv_libretro.so` (CI artifact `retrotv-aarch64`) to `<storage>/retrotv/`.
 2. Put your M3U URL (or a path) on the first line of `<storage>/retrotv/playlist.txt`.
+   The TV guide comes from the playlist's `x-tvg-url`. To use a different guide, or if your
+   playlist has none, add a line `epg=<URL or path>` (XMLTV, `.xml` or `.xml.gz`):
+   ```
+   http://dispatcharr:9191/output/m3u/my-profile
+   epg=http://example.org/guide.xml.gz
+   ```
+   Channels are matched to the guide by `tvg-id`, then by name (so a guide from another
+   source works), then by channel number (own guide only).
 3. Copy `replayos/retrotv_install.sh` and `retrotv_uninstall.sh` to `<storage>/roms/_extra/`.
 4. Run **Extra → retrotv_install.sh** (or `bash <storage>/roms/_extra/retrotv_install.sh` as root).
    It backs up `cores.cfg`, points `[avtest]` at RetroTV and restarts ReplayOS.

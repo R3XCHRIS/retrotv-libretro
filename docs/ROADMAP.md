@@ -109,6 +109,11 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] Audio track choice in the quick menu (re-tunes with the chosen track; subtitles not planned)
 - [ ] ~~Preview of the highlighted channel in the guide~~ not planned (needs a second stream); the guide previews the current one
 
+### Guide sources (M2)
+- [x] `epg=<URL or path>` in playlist.txt overrides the playlist's `x-tvg-url`; `.xml.gz` unpacked
+- [x] Guide channels matched by tvg-id, then display name, then number (only for the playlist's own guide,
+  since other sources number channels differently). Checked with Tunarr's playlist plus Dispatcharr's guide.
+
 ### Onboarding (M2)
 - [x] Setup screen when there are no channels: the problem in plain words (404, refused, timeout, not an
   M3U, empty playlist.txt, ...), a hint, the exact playlist.txt path on the mounted storage, an example link

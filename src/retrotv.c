@@ -16,10 +16,12 @@
 #include "ffapi.h"
 #include "epg.h"
 #include "guide.h"
+#include "gunzip.h"
 #include "lastch.h"
 #include "loud.h"
 #include "onboard.h"
 #include "options.h"
+#include "plconf.h"
 #include "testcard.h"
 #include "theme.h"
 #include "m3u.h"
@@ -77,6 +79,7 @@ static pthread_t guide_thread;
 static int guide_thread_live;
 static atomic_int guide_stop;
 static char guide_url[1024];
+static char epg_override[1024];        /* epg= from playlist.txt, else the playlist's x-tvg-url */
 #define GUIDE_BACK (2 * 3600)          /* keep programmes from 2 h ago ... */
 #define GUIDE_AHEAD (26 * 3600)        /* ... to 26 h ahead */
 #define GUIDE_REFRESH (2 * 3600)       /* refetch every 2 h */
@@ -199,13 +202,12 @@ static void draw_banner(osd_surface *s, player_state st)
   clip_copy(group, sizeof(group), c->group ? c->group : "", 40);
 
   /* Now / Next from the guide, if it has this channel */
-  const char *gid = c->tvg_id && *c->tvg_id ? c->tvg_id : c->number;
   char now_t[48] = "", next_t[48] = "", t0[12] = "", t1[12] = "", t2[12] = "";
   double frac = -1;
   pthread_mutex_lock(&guide_mu);
   const epg_prog *pn, *px;
   time_t tnow = time(NULL);
-  epg_now_next(epg_find(guide, gid), tnow, &pn, &px);
+  epg_now_next(guide_chan(guide, c), tnow, &pn, &px);
   if (pn) {
     epg_ascii(pn->title, now_t, sizeof(now_t));
     hhmm(pn->start, t0, sizeof(t0));
@@ -391,7 +393,9 @@ static char *slurp(const char *path, size_t max)
   return buf;
 }
 
-static char *fetch_url(const char *url, size_t max, const AVIOInterruptCB *icb, char *err, size_t errlen)
+/* Download (or read, for a path) up to max bytes into a malloc'd buffer with a
+ * NUL after the data; *len gets the size (data may contain NULs: gzip). */
+static char *fetch_url(const char *url, size_t max, const AVIOInterruptCB *icb, size_t *len_out, char *err, size_t errlen)
 {
   AVIOContext *io = NULL;
   AVDictionary *o = NULL;
@@ -400,28 +404,26 @@ static char *fetch_url(const char *url, size_t max, const AVIOInterruptCB *icb, 
   int rc = p_avio_open2(&io, url, AVIO_FLAG_READ, icb, &o);
   p_av_dict_free(&o);
   if (rc < 0) { char e[96]; p_av_strerror(rc, e, sizeof(e)); snprintf(err, errlen, "fetch failed: %s", e); return NULL; }
-  char *buf = malloc(max + 1);
-  size_t len = 0;
-  while (buf && len < max) {
-    int n = p_avio_read(io, (unsigned char *)buf + len, (int)(max - len));
+  size_t cap = 256 * 1024 < max ? 256 * 1024 : max, len = 0;
+  char *buf = malloc(cap + 1);
+  while (buf) {
+    if (len == cap) {
+      if (cap >= max) break;
+      size_t nc = cap * 2 < max ? cap * 2 : max;
+      char *nb = realloc(buf, nc + 1);
+      if (!nb) { free(buf); buf = NULL; break; }
+      buf = nb;
+      cap = nc;
+    }
+    int n = p_avio_read(io, (unsigned char *)buf + len, (int)(cap - len));
     if (n <= 0) break;
     len += (size_t)n;
   }
   p_avio_closep(&io);
-  if (buf) buf[len] = '\0';
+  if (!buf) { snprintf(err, errlen, "out of memory"); return NULL; }
+  buf[len] = '\0';
+  if (len_out) *len_out = len;
   return buf;
-}
-
-/* First line that isn't blank or a comment, trimmed (in place). */
-static char *first_line(char *t)
-{
-  for (char *line = strtok(t, "\r\n"); line; line = strtok(NULL, "\r\n")) {
-    while (*line == ' ' || *line == '\t') line++;
-    char *e = line + strlen(line);
-    while (e > line && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
-    if (*line && *line != '#') return line;
-  }
-  return NULL;
 }
 
 static int ends_with(const char *s, const char *suf)
@@ -442,36 +444,36 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
     snprintf(out, n, "%s", game_path);
     return 0;
   }
+  plconf pc;
   if (game_path) {
-    char *t = slurp(game_path, 4096), *l = t ? first_line(t) : NULL;
-    if (l) {
+    char *t = slurp(game_path, 4096);
+    snprintf(buf, sizeof(buf), "%s", game_path);
+    char *slash = strrchr(buf, '/');
+    if (slash) *slash = '\0';
+    plconf_parse(t, slash ? buf : ".", &pc);
+    free(t);
+    if (*pc.playlist) {
       snprintf(ob_path, sizeof(ob_path), "%s", game_path);    /* the file the link came from */
-      if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
-      else {
-        snprintf(buf, sizeof(buf), "%s", game_path);
-        char *slash = strrchr(buf, '/');
-        if (slash) *slash = '\0';
-        snprintf(out, n, "%s/%s", slash ? buf : ".", l);
-      }
-      free(t);
+      snprintf(out, n, "%s", pc.playlist);
+      snprintf(epg_override, sizeof(epg_override), "%s", pc.epg);
       return 0;
     }
-    free(t);
   }
   static const char *roots[] = { "/media/nfs", "/media/usb", "/media/nvme", "/media/sd" };
   for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
     snprintf(buf, sizeof(buf), "%s/retrotv/playlist.txt", roots[i]);
-    char *t = slurp(buf, 4096), *l = t ? first_line(t) : NULL;
-    if (t && !l && ob_why != OB_EMPTY_FILE) { ob_why = OB_EMPTY_FILE; snprintf(ob_path, sizeof(ob_path), "%s", buf); }
-    if (l) {
-      snprintf(store_dir, sizeof(store_dir), "%s/retrotv", roots[i]);
+    char *t = slurp(buf, 4096), dir[600];
+    snprintf(dir, sizeof(dir), "%s/retrotv", roots[i]);
+    plconf_parse(t, dir, &pc);
+    if (t && !*pc.playlist && ob_why != OB_EMPTY_FILE) { ob_why = OB_EMPTY_FILE; snprintf(ob_path, sizeof(ob_path), "%s", buf); }
+    free(t);
+    if (*pc.playlist) {
+      snprintf(store_dir, sizeof(store_dir), "%s", dir);
       snprintf(ob_path, sizeof(ob_path), "%s", buf);
-      if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
-      else snprintf(out, n, "%s/retrotv/%s", roots[i], l);
-      free(t);
+      snprintf(out, n, "%s", pc.playlist);
+      snprintf(epg_override, sizeof(epg_override), "%s", pc.epg);
       return 0;
     }
-    free(t);
     snprintf(buf, sizeof(buf), "%s/retrotv/channels.m3u", roots[i]);
     FILE *f = fopen(buf, "rb");
     if (f) {
@@ -497,7 +499,7 @@ static int load_playlist(const char *src)
 {
   if (m3u_is_url(src)) {
     char err[128] = "";
-    char *text = fetch_url(src, 8u << 20, NULL, err, sizeof(err));
+    char *text = fetch_url(src, 8u << 20, NULL, NULL, err, sizeof(err));
     if (!text) { ob_why = OB_FETCH; snprintf(ob_err, sizeof(ob_err), "%s", err); snprintf(help_reason, sizeof(help_reason), "%s", err); return -1; }
     if (!onboard_is_m3u(text)) { ob_why = OB_NOT_M3U; snprintf(help_reason, sizeof(help_reason), "not an M3U playlist"); free(text); return -1; }
     int rc = m3u_parse(text, NULL, &chans);
@@ -542,11 +544,18 @@ static void *guide_main(void *arg)
   const AVIOInterruptCB icb = { guide_interrupt, NULL };
   while (!atomic_load(&guide_stop)) {
     char err[128] = "";
-    char *xml = fetch_url(guide_url, 32u << 20, &icb, err, sizeof(err));
+    size_t len = 0;
+    char *xml = fetch_url(guide_url, 64u << 20, &icb, &len, err, sizeof(err));
+    if (xml && gunzip_is_gzip(xml, len)) {           /* .xml.gz guides */
+      char *un = gunzip(xml, len, 128u << 20, NULL, err, sizeof(err));
+      free(xml);
+      xml = un;
+    }
     epg *g = NULL;
     if (xml) {
       time_t now = time(NULL);
       g = epg_parse(xml, now - GUIDE_BACK, now + GUIDE_AHEAD);
+      if (g) g->match_numbers = !*epg_override;     /* another source numbers channels differently */
       free(xml);
     }
     if (atomic_load(&guide_stop)) { epg_free(g); break; }
@@ -1054,7 +1063,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   if (chans.count) {
     logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, src);
     last_init(src);
-    guide_start(chans.epg_url);
+    if (*epg_override) logf_(RETRO_LOG_INFO, "guide from playlist.txt: %s", epg_override);
+    guide_start(*epg_override ? epg_override : chans.epg_url);
     char *t = slurp(last_path, 4096);
     int idx = lastch_find(&chans, t);
     free(t);
@@ -1084,7 +1094,7 @@ RETRO_API void retro_unload_game(void)
     nanosleep(&ts, NULL);
   }
   m3u_free(&chans);
-  last_path[0] = store_dir[0] = state_dir[0] = '\0';
+  last_path[0] = store_dir[0] = state_dir[0] = epg_override[0] = '\0';
   ob_why = OB_NO_FILE;
   ob_err[0] = ob_path[0] = '\0';
   testcard_on = welcome_on = welcome_save = zoom_save = 0;

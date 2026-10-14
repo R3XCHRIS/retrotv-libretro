@@ -82,6 +82,9 @@ if [[ ! -f "$STORAGE/retrotv/playlist.txt" ]]; then
 # Put your M3U playlist link (or a full path to an .m3u file) on the first
 # line that doesn't start with #, then open RetroTV. For example, Dispatcharr:
 #   http://<server-ip>:9191/output/m3u/<channel-profile>
+# The TV guide comes from the playlist's x-tvg-url. To use another guide
+# (XMLTV, .xml or .xml.gz, link or path), add a line like:
+#   epg=http://<server>/guide.xml.gz
 TEMPLATE
   say "created $STORAGE/retrotv/playlist.txt - put your M3U link in it"
 fi
