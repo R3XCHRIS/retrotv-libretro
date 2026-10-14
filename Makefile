@@ -13,7 +13,7 @@ FFINC   := deps/ffmpeg
 
 WARN    := -Wall -Wextra -Wno-unused-parameter
 CFLAGS  := -std=gnu11 -O2 -g $(WARN) -fPIC -fvisibility=hidden -Iinclude -I$(FFINC)
-SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/loud.c src/lastch.c src/epg.c src/guide.c src/options.c src/onboard.c src/testcard.c src/theme.c src/gunzip.c src/plconf.c src/remote.c src/ffapi.c
+SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/loud.c src/lastch.c src/epg.c src/guide.c src/options.c src/onboard.c src/testcard.c src/theme.c src/gunzip.c src/plconf.c src/remote.c src/webui.c src/ffapi.c
 
 all: build/retrotv_libretro.so build/harness
 
@@ -29,6 +29,10 @@ build/harness: tests/harness.c | build
 
 build:
 	mkdir -p build
+
+# the remote control page, embedded in the core (the generated file is committed)
+src/webui.c: src/webui.html scripts/embed.py
+	python3 scripts/embed.py $< $@ webui
 
 test: | build
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_m3u tests/test_m3u.c src/m3u.c
@@ -57,6 +61,8 @@ test: | build
 check: $(FFINC)/.tag | build
 	$(HOSTCC) $(CFLAGS) -Werror -fsyntax-only $(SRCS)
 	$(HOSTCC) -std=gnu11 $(WARN) -Werror -Iinclude -fsyntax-only tests/harness.c
+	python3 scripts/embed.py src/webui.html build/webui.check.c webui
+	cmp -s src/webui.c build/webui.check.c || { echo 'src/webui.c is stale: run make src/webui.c'; exit 1; }
 
 pi-test: all
 	scripts/pi-test.sh

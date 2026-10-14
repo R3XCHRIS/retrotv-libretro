@@ -14,16 +14,24 @@ static int fails;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); fails++; } } while (0)
 
 static int calls;
-static int fake(const remote_cmd *c, char *body, size_t n, void *ctx)
+static int fake(const remote_cmd *c, remote_buf *b, void *ctx)
 {
   calls++;
   const m3u_list *l = ctx;
-  if (c->kind != RC_TUNE) { snprintf(body, n, "kind %d\n", c->kind); return c->kind == RC_NONE ? 404 : 200; }
+  if (c->kind == RC_PAGE) { b->type = "text/html; charset=utf-8"; remote_puts(b, "<!doctype html>"); return 200; }
+  if (c->kind == RC_CHANNELS) {                    /* a big reply: grows past the first block */
+    remote_puts(b, "{\"channels\":[");
+    for (int i = 0; i < 3000; i++) remote_printf(b, "%s%d", i ? "," : "", i);
+    remote_puts(b, "]}");
+    return 200;
+  }
+  if (c->kind == RC_HELP) { for (int i = 0; i < 70000; i++) remote_puts(b, "0123456789abcdef"); return 200; }   /* > 1 MB */
+  if (c->kind != RC_TUNE) { remote_printf(b, "kind %d\n", c->kind); return c->kind == RC_NONE ? 404 : 200; }
   int i = remote_find(l, c->ch, c->name);
-  if (i < 0) { snprintf(body, n, "{\"ok\":false}"); return 404; }
-  char nm[128];
-  remote_json_str(nm, sizeof(nm), l->ch[i].name);
-  snprintf(body, n, "{\"ok\":true,\"name\":%s}", nm);
+  if (i < 0) { remote_puts(b, "{\"ok\":false}"); return 404; }
+  remote_puts(b, "{\"ok\":true,\"name\":");
+  remote_json(b, l->ch[i].name);
+  remote_puts(b, "}");
   return 200;
 }
 
@@ -69,7 +77,11 @@ int main(void)
   remote_parse("GET /status HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_STATUS);
   remote_parse("GET / HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_PAGE);
+  remote_parse("GET /help HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_HELP);
+  remote_parse("GET /channels?x=1 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_CHANNELS);
   remote_parse("GET /tuner HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_NONE);
   remote_parse("DELETE /up HTTP/1.1\r\n", &c);
@@ -99,13 +111,19 @@ int main(void)
   CHECK(remote_find(&l, NULL, "") == -1);
   CHECK(remote_find(NULL, "1", NULL) == -1);
 
-  char j[32];
-  remote_json_str(j, sizeof(j), "a\"b\\c\n");
-  CHECK(!strcmp(j, "\"a\\\"b\\\\c\\u000a\""));
-  remote_json_str(j, 8, "abcdefghij");
-  CHECK(!strcmp(j, "\"abcde\""));
-  remote_json_str(j, sizeof(j), NULL);
-  CHECK(!strcmp(j, "\"\""));
+  remote_buf b = { 0 };
+  remote_json(&b, "a\"b\\c\n");
+  remote_puts(&b, " ");
+  remote_json(&b, NULL);
+  remote_printf(&b, " %d", 42);
+  CHECK(b.p && !strcmp(b.p, "\"a\\\"b\\\\c\\u000a\" null 42") && !b.failed);
+  char longs[2000];
+  memset(longs, 'x', sizeof(longs) - 1);
+  longs[sizeof(longs) - 1] = '\0';
+  remote_printf(&b, "%s!", longs);                         /* longer than the printf scratch */
+  CHECK(b.len == strlen(b.p) && b.p[b.len - 1] == '!' && b.len == 23 + 1999 + 1);
+  remote_buf_free(&b);
+  CHECK(!b.p && !b.len);
 
   /* the real server over loopback */
   CHECK(remote_start(0, 0, fake, &l) == 0);
@@ -121,6 +139,13 @@ int main(void)
   CHECK(!strncmp(r, "HTTP/1.1 404 ", 13));
   get(port, "GET /nope HTTP/1.1\r\n\r\n", r, sizeof(r));
   CHECK(!strncmp(r, "HTTP/1.1 404 ", 13) && strstr(r, "text/plain"));
+  get(port, "GET / HTTP/1.1\r\n\r\n", r, sizeof(r));
+  CHECK(strstr(r, "Content-Type: text/html; charset=utf-8") && strstr(r, "\r\n\r\n<!doctype html>"));
+  static char big[64 * 1024];
+  get(port, "GET /channels HTTP/1.1\r\n\r\n", big, sizeof(big));
+  CHECK(!strncmp(big, "HTTP/1.1 200 ", 13) && strstr(big, ",2999]}") && strstr(big, "Content-Length: "));
+  get(port, "GET /help HTTP/1.1\r\n\r\n", r, sizeof(r));   /* over the size cap */
+  CHECK(!strncmp(r, "HTTP/1.1 500 ", 13) && strstr(r, "reply too large"));
   get(port, "GET /up HTTP/1.0\n\n", r, sizeof(r));          /* bare newlines */
   CHECK(!strncmp(r, "HTTP/1.1 200 ", 13));
   int before = calls;
