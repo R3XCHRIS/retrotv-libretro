@@ -62,7 +62,7 @@ int main(void)
   /* drawing the whole screen: no crash, preview copied, ruler drawn */
   uint32_t *px = calloc(640 * 480, 4);
   for (int i = 0; i < 640 * 480; i++) px[i] = 0x00ff0000;                              /* red "video" */
-  osd_surface s = { px, 640, 480, 640 };
+  osd_surface s = { px, 640, 480, 640, 0 };
   v = (guide_view){ 0, 0, t1900 };
   guide_draw(&s, &l, g, &v, 0, t1900 + 40 * 60);
   CHECK(px[(24 + 60) * 640 + 32 + 80] == 0x00ff0000);                                 /* preview shows the picture */

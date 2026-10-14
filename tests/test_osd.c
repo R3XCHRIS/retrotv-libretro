@@ -12,7 +12,7 @@ int main(void)
 {
   enum { W = 64, H = 32 };
   uint32_t px[W * H];
-  osd_surface s = { px, W, H, W };
+  osd_surface s = { px, W, H, W, 0 };
 
   memset(px, 0, sizeof(px));
   osd_fill(&s, -10, -10, 1000, 1000, OSD_RGB(255, 0, 0), 255);          /* clipped, no crash */
@@ -34,6 +34,35 @@ int main(void)
   for (int i = 0; i < W * H; i++) px[i] = OSD_RGB(255, 255, 255);
   osd_fill(&s, 0, 0, W, H, OSD_RGB(255, 0, 0), 128);             /* no channel overflows */
   CHECK(px[0] == OSD_RGB(255, 127, 127));
+
+  /* 240p: logical 640x480 coordinates on a buffer with half the rows */
+  {
+    enum { LW = 64, LH = 64 };
+    static uint32_t half[LW * (LH / 2)];
+    osd_surface h = { half, LW, LH, LW, 1 };
+    CHECK(osd_rows(&h) == LH / 2 && osd_line_h(&h) == 16);
+    memset(half, 0, sizeof(half));
+    osd_fill(&h, 0, 20, LW, 10, OSD_RGB(255, 0, 0), 255);         /* logical 20..29 -> rows 10..14 */
+    CHECK(half[9 * LW] == 0 && half[10 * LW] && half[14 * LW] && half[15 * LW] == 0);
+    memset(half, 0, sizeof(half));
+    osd_fill(&h, 0, 41, LW, 1, OSD_RGB(255, 0, 0), 255);          /* a 1-pixel rule stays visible */
+    CHECK(half[20 * LW]);
+    memset(half, 0, sizeof(half));
+    osd_fill(&h, 0, 0, LW, 1000, OSD_RGB(9, 9, 9), 255);         /* clipped to the buffer, no overflow */
+    memset(half, 0, sizeof(half));
+    osd_text(&h, 0, 16, "I", 1, OSD_RGB(255, 255, 255));          /* 1x keeps 8 rows: rows 8..15 */
+    int top = -1, bot = -1;
+    for (int r = 0; r < LH / 2; r++) for (int c = 0; c < 8; c++) if (half[r * LW + c]) { if (top < 0) top = r; bot = r; }
+    CHECK(top >= 8 && bot <= 15 && bot - top >= 5);
+    memset(half, 0, sizeof(half));
+    osd_text(&h, 0, 0, "I", 4, OSD_RGB(255, 255, 255));           /* 4x -> 2 rows per glyph row */
+    top = bot = -1;
+    for (int r = 0; r < LH / 2; r++) for (int c = 0; c < 32; c++) if (half[r * LW + c]) { if (top < 0) top = r; bot = r; }
+    CHECK(bot <= 15 && bot - top >= 11);
+    uint32_t seed = 1;
+    osd_static(&h, &seed);                                            /* stays inside the 32 rows */
+    osd_static_vhs(&h, &seed, 7);
+  }
 
   memset(px, 0, sizeof(px));
   CHECK(osd_text_width("AB", 2) == 32);
