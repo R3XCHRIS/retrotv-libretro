@@ -55,6 +55,9 @@ static bool env(unsigned cmd, void *data)
     return *(enum retro_pixel_format *)data == RETRO_PIXEL_FORMAT_XRGB8888;
   case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     return true;
+  case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:     /* like ReplayOS: a folder that may not exist yet */
+    *(const char **)data = "saves/harness";
+    return true;
   case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
     const struct retro_system_av_info *av = data;
     printf("  [%6.2fs] refresh %.2f -> %.2f fps\n", t_run, fps, av->timing.fps);
@@ -112,6 +115,7 @@ static int button_id(const char *w)
     {"a", RETRO_DEVICE_ID_JOYPAD_A}, {"b", RETRO_DEVICE_ID_JOYPAD_B},
     {"select", RETRO_DEVICE_ID_JOYPAD_SELECT}, {"start", RETRO_DEVICE_ID_JOYPAD_START},
     {"x", RETRO_DEVICE_ID_JOYPAD_X}, {"y", RETRO_DEVICE_ID_JOYPAD_Y},
+    {"left", RETRO_DEVICE_ID_JOYPAD_LEFT}, {"right", RETRO_DEVICE_ID_JOYPAD_RIGHT},
   };
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); i++) if (!strcmp(m[i].n, w)) return m[i].id;
   return -1;
