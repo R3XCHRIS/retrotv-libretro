@@ -46,6 +46,15 @@ time_t epg_time(const char *s)
   return (time_t)t;
 }
 
+void epg_clock(time_t t, int h24, int ampm, char *out, size_t n)
+{
+  struct tm tmv;
+  localtime_r(&t, &tmv);
+  if (h24) { snprintf(out, n, "%02d:%02d", tmv.tm_hour, tmv.tm_min); return; }
+  int h = tmv.tm_hour % 12 ? tmv.tm_hour % 12 : 12;
+  snprintf(out, n, "%d:%02d%s", h, tmv.tm_min, ampm ? (tmv.tm_hour < 12 ? "am" : "pm") : "");
+}
+
 /* ---------- text ---------- */
 
 static void put_utf8(char **o, char *end, unsigned long cp)
@@ -206,12 +215,60 @@ static int cmp_chan(const void *key, const void *c) { return strcmp(key, ((const
 
 static void free_prog(epg_prog *p) { free(p->title); free(p->sub); free(p->desc); }
 
+/* lowercase letters and digits only; a trailing "hd" dropped ("BBC One HD" -> "bbcone") */
+static void norm(const char *s, char *out, size_t n)
+{
+  char a[256];
+  size_t o = 0;
+  epg_ascii(s, a, sizeof(a));
+  for (const char *p = a; *p && o + 1 < n; p++) {
+    char c = *p;
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) out[o++] = c;
+  }
+  out[o] = '\0';
+  if (o > 2 && !strcmp(out + o - 2, "hd")) out[o - 2] = '\0';
+}
+
+/* <channel id="..."><display-name>..</display-name>...</channel> -> aliases */
+static void parse_channels(const char *xml, epg *g)
+{
+  size_t cap = 0;
+  for (const char *p = xml ? strstr(xml, "<channel") : NULL; p; p = strstr(p + 1, "<channel")) {
+    if (p[8] != ' ' && p[8] != '\t' && p[8] != '\n') continue;
+    const char *gt = strchr(p, '>'), *end = gt ? strstr(gt, "</channel>") : NULL;
+    char id[128];
+    if (!end || attr(p, gt, "id", id, sizeof(id))) continue;
+    for (const char *d = gt + 1; d < end; d++) {
+      d = strstr(d, "<display-name");
+      if (!d || d > end) break;
+      char *raw = child(d, end, "display-name", 256), nm[128];
+      if (!raw) continue;
+      norm(raw, nm, sizeof(nm));
+      free(raw);
+      if (!*nm) continue;
+      if (g->nalias == cap) {
+        size_t nc = cap ? cap * 2 : 64;
+        epg_alias *na = realloc(g->alias, nc * sizeof(*na));
+        if (!na) return;
+        g->alias = na;
+        cap = nc;
+      }
+      char *a = strdup(nm), *b = strdup(id);
+      if (!a || !b) { free(a); free(b); return; }
+      g->alias[g->nalias++] = (epg_alias){ a, b };
+    }
+    p = end;
+  }
+}
+
 epg *epg_parse(const char *xml, time_t from, time_t to)
 {
   epg *g = calloc(1, sizeof(*g));
   item *it = NULL;
   size_t n = 0, cap = 0;
   if (!g) return NULL;
+  g->match_numbers = 1;
   for (const char *p = xml ? strstr(xml, "<programme") : NULL; p; p = strstr(p + 1, "<programme")) {
     const char *gt = strchr(p, '>'), *end = gt ? strstr(gt, "</programme>") : NULL;
     if (!end) break;
@@ -258,6 +315,7 @@ epg *epg_parse(const char *xml, time_t from, time_t to)
     i = j;
   }
   free(it);
+  parse_channels(xml, g);
   return g;
 fail:
   for (size_t k = 0; k < n; k++) { free(it[k].chan); free_prog(&it[k].p); }
@@ -275,6 +333,8 @@ void epg_free(epg *g)
     free(g->ch[i].id);
   }
   free(g->ch);
+  for (size_t i = 0; i < g->nalias; i++) { free(g->alias[i].name); free(g->alias[i].id); }
+  free(g->alias);
   free(g);
 }
 
@@ -282,6 +342,24 @@ const epg_chan *epg_find(const epg *g, const char *id)
 {
   if (!g || !id || !g->nch) return NULL;
   return bsearch(id, g->ch, g->nch, sizeof(*g->ch), cmp_chan);
+}
+
+const epg_chan *epg_lookup(const epg *g, const char *tvg_id, const char *number, const char *tvg_name, const char *name)
+{
+  const epg_chan *c;
+  if (!g) return NULL;
+  if (tvg_id && *tvg_id && (c = epg_find(g, tvg_id))) return c;
+  const char *names[2] = { tvg_name, name };
+  for (int k = 0; k < 2; k++) {
+    char nm[128];
+    if (!names[k] || !*names[k]) continue;
+    norm(names[k], nm, sizeof(nm));
+    if (!*nm) continue;
+    for (size_t i = 0; i < g->nalias; i++)
+      if (!strcmp(g->alias[i].name, nm) && (c = epg_find(g, g->alias[i].id))) return c;
+  }
+  if (g->match_numbers && number && *number && (c = epg_find(g, number))) return c;
+  return NULL;
 }
 
 void epg_now_next(const epg_chan *c, time_t t, const epg_prog **now, const epg_prog **next)

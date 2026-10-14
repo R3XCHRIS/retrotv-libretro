@@ -1,4 +1,5 @@
 #include "guide.h"
+#include "theme.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,13 +17,14 @@
 #define GX (L + CH_W + 4)          /* grid */
 #define GW (R - GX)
 
-#define NAVY OSD_RGB(8, 16, 72)
-#define GOLD OSD_RGB(240, 200, 40)
-#define CELL OSD_RGB(28, 44, 120)
-#define CELL_SEL OSD_RGB(50, 96, 200)
-#define WHITE OSD_RGB(255, 255, 255)
-#define DIM OSD_RGB(160, 180, 230)
-#define YELLOW OSD_RGB(255, 214, 64)
+#define NAVY TH->on_accent         /* text on accent fills (ruler, focused cell) */
+#define BG TH->bg
+#define GOLD TH->accent
+#define CELL TH->cell
+#define CELL_SEL TH->cell_sel
+#define WHITE TH->text
+#define DIM TH->sub
+#define YELLOW TH->title
 
 int guide_cells(const epg_chan *c, time_t t0, time_t span, int x0, int w, guide_cell *out, int max)
 {
@@ -56,14 +58,17 @@ void guide_scroll(guide_view *v, size_t count)
   if (count > GUIDE_ROWS && v->top > count - GUIDE_ROWS) v->top = count - GUIDE_ROWS;
 }
 
-static const char *chan_id(const m3u_channel *c) { return c->tvg_id && *c->tvg_id ? c->tvg_id : c->number; }
+const epg_chan *guide_chan(const epg *g, const m3u_channel *c)
+{
+  return epg_lookup(g, c->tvg_id, c->number, c->tvg_name, c->name);
+}
 
 const epg_prog *guide_focus(const epg *g, const m3u_list *l, const guide_view *v, time_t now)
 {
   if (!l || v->sel >= l->count) return NULL;
   const epg_prog *p, *next;
   time_t t = now > v->t0 ? now : v->t0;
-  epg_now_next(epg_find(g, chan_id(&l->ch[v->sel])), t, &p, &next);
+  epg_now_next(guide_chan(g, &l->ch[v->sel]), t, &p, &next);
   /* paged ahead and the programme on air at the left edge is nearly over:
    * focus the next one, like a printed guide's first full listing */
   if (p && next && v->t0 > now && p->stop - v->t0 < 10 * 60) p = next;
@@ -77,12 +82,6 @@ static void label(const char *s, char *out, size_t n, int max)
   epg_shorten(out, max);
 }
 
-static void hhmm(time_t t, char *out, size_t n)
-{
-  struct tm tmv;
-  localtime_r(&t, &tmv);
-  strftime(out, n, "%H:%M", &tmv);
-}
 
 /* word-wrap text into at most lines lines of cols characters */
 static void wrap(osd_surface *s, int x, int y, const char *text, int cols, int lines, uint32_t rgb)
@@ -115,7 +114,7 @@ static void draw_preview(osd_surface *s)
   for (int y = 0; y < PV_H; y++)
     for (int x = 0; x < PV_W; x++)
       pv[y * PV_W + x] = s->px[(size_t)(y * 4 + 2) * s->pitch + x * 4 + 2];
-  osd_fill(s, 0, 0, s->w, s->h, NAVY, 255);
+  osd_fill(s, 0, 0, s->w, s->h, BG, 255);
   osd_fill(s, L - 2, TOP - 2, PV_W + 4, PV_H + 4, GOLD, 255);
   for (int y = 0; y < PV_H; y++)
     memcpy(&s->px[(size_t)(TOP + y) * s->pitch + L], &pv[y * PV_W], PV_W * 4);
@@ -124,7 +123,7 @@ static void draw_preview(osd_surface *s)
 static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, const guide_view *v)
 {
   int x = L + PV_W + 16, cols = (R - x) / 8;
-  char buf[128], t0[8], t1[8];
+  char buf[128], t0[12], t1[12];
   if (v->sel < l->count) {
     const m3u_channel *c = &l->ch[v->sel];
     char name[64];
@@ -138,8 +137,8 @@ static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, cons
   }
   label(p->title, buf, sizeof(buf), (R - x) / 16);
   osd_text_shadow(s, x, TOP + 18, buf, 2, WHITE);
-  hhmm(p->start, t0, sizeof(t0));
-  hhmm(p->stop, t1, sizeof(t1));
+  epg_clock(p->start, v->clock24, 1, t0, sizeof(t0));
+  epg_clock(p->stop, v->clock24, 1, t1, sizeof(t1));
   char sub[96] = "";
   if (p->sub) label(p->sub, sub, sizeof(sub), cols - 16);
   snprintf(buf, sizeof(buf), "%s - %s  %s", t0, t1, sub);
@@ -151,10 +150,10 @@ static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, cons
   }
 }
 
-static void draw_ruler(osd_surface *s, time_t t0, time_t now)
+static void draw_ruler(osd_surface *s, time_t t0, time_t now, int clock24)
 {
   struct tm tmv;
-  char day[24], t[8];
+  char day[24], t[12];
   localtime_r(&now, &tmv);
   strftime(day, sizeof(day), "%a %d %b", &tmv);
   for (char *c = day; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
@@ -162,7 +161,7 @@ static void draw_ruler(osd_surface *s, time_t t0, time_t now)
   osd_text(s, L + 6, RULER_Y + 5, day, 1, NAVY);
   for (time_t m = t0; m < t0 + GUIDE_SPAN; m += GUIDE_STEP) {
     int x = GX + (int)((long long)(m - t0) * GW / GUIDE_SPAN);
-    hhmm(m, t, sizeof(t));
+    epg_clock(m, clock24, 1, t, sizeof(t));
     osd_fill(s, x, RULER_Y, 2, 18, NAVY, 255);
     osd_text(s, x + 6, RULER_Y + 5, t, 1, NAVY);
   }
@@ -173,7 +172,7 @@ void guide_draw(osd_surface *s, const m3u_list *l, const epg *g, const guide_vie
   draw_preview(s);
   const epg_prog *focus = guide_focus(g, l, v, now);
   draw_info(s, l, focus, v);
-  draw_ruler(s, v->t0, now);
+  draw_ruler(s, v->t0, now, v->clock24);
 
   guide_cell cells[24];
   for (int r = 0; r < GUIDE_ROWS && v->top + (size_t)r < l->count; r++) {
@@ -187,8 +186,8 @@ void guide_draw(osd_surface *s, const m3u_list *l, const epg *g, const guide_vie
     osd_text_shadow(s, L + 6, y + 4, num, 2, i == playing ? GOLD : YELLOW);
     osd_text(s, L + 6, y + 24, name, 1, WHITE);
 
-    int n = guide_cells(epg_find(g, chan_id(c)), v->t0, GUIDE_SPAN, GX, GW, cells, 24);
-    osd_fill(s, GX, y, GW, ROW_H - 2, OSD_RGB(16, 26, 84), 255);          /* gaps: no info */
+    int n = guide_cells(guide_chan(g, c), v->t0, GUIDE_SPAN, GX, GW, cells, 24);
+    osd_fill(s, GX, y, GW, ROW_H - 2, TH->cell_gap, 255);          /* gaps: no info */
     if (!n) osd_text(s, GX + 6, y + 15, "No information", 1, DIM);
     for (int k = 0; k < n; k++) {
       int hl = sel && cells[k].p == focus;

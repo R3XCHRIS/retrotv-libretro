@@ -47,6 +47,7 @@
   X(avutil, av_pix_fmt_desc_get)                              \
   X(avutil, av_dict_set)                                      \
   X(avutil, av_dict_free)                                     \
+  X(avutil, av_dict_get)                                      \
   X(avutil, av_strerror)                                      \
   X(avutil, av_log_set_level)                                 \
   X(avutil, av_channel_layout_default)                        \

@@ -76,6 +76,26 @@ n=$(awk -v slot="[$SLOT]" '/^\[/{insec=($0==slot)} insec && /retrotv_libretro\.s
 [[ $n -eq 3 ]] || { cat "$STORAGE/retrotv/backup/cores.cfg.$NOW" >"$CFG"; die "cores.cfg edit failed - restored backup"; }
 say "[$SLOT] now launches RetroTV"
 
-[[ -f "$STORAGE/retrotv/playlist.txt" ]] || say "NOTE: add your M3U URL to $STORAGE/retrotv/playlist.txt"
+if [[ ! -f "$STORAGE/retrotv/playlist.txt" ]]; then
+  cat >"$STORAGE/retrotv/playlist.txt" <<'TEMPLATE'
+# RetroTV playlist
+#
+# CHANNELS: the first line that doesn't start with # is your channel list,
+# either an M3U link (http://...) or the full path to an .m3u file.
+#   Dispatcharr:  http://<server>:9191/output/m3u/<channel-profile>
+#   Tunarr:       http://<server>:8088/api/channels.m3u
+#
+# TV GUIDE: taken from the playlist automatically (its x-tvg-url).
+# To use a different guide, or if your playlist has none, remove the #
+# in front of the epg= line below and put in an XMLTV link or path
+# (.xml or .xml.gz):
+#   epg=http://<server>/guide.xml.gz
+#
+# Lines starting with # are ignored. Close and reopen RetroTV after a change.
+# Put your channel list link on the next line:
+
+TEMPLATE
+  say "created $STORAGE/retrotv/playlist.txt - put your M3U link in it"
+fi
 say "done - restarting ReplayOS in 3 s. Then open Extra > audio_video_test."
 ( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &

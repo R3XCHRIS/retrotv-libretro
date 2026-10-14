@@ -30,7 +30,11 @@ typedef struct {
   size_t sel;                      /* highlighted channel */
   size_t top;                      /* first channel row on screen */
   time_t t0;                       /* left edge of the grid */
+  int clock24;                     /* 24 h times, else 12 h */
 } guide_view;
+
+/* Guide data for a playlist channel (tvg-id, number, then name). */
+const epg_chan *guide_chan(const epg *g, const m3u_channel *c);
 
 /* Keep sel on screen. */
 void guide_scroll(guide_view *v, size_t count);

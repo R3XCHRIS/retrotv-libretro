@@ -6,6 +6,8 @@
 # SCRIPT button names are libretro ids (harness): pad A = "b", pad B = "a",
 # pad Y = "x", pad X = "y".
 #
+# OPTS="retrotv_theme=teletext,..." sets core options for the run.
+#
 # Writes screenshots, the run log (run.log) and per-thread CPU samples
 # (cpu.txt, read by scripts/cpu-summary.py) to $OUT.
 #
@@ -26,7 +28,7 @@ OUT="${OUT:-build/pi-shots}"
 ssh -o BatchMode=yes "$PI" "rm -rf $REMOTE && mkdir -p $REMOTE/shots"
 scp -q -o BatchMode=yes build/retrotv_libretro.so build/harness scripts/pi-run.sh "$PI:$REMOTE/"
 scp -q -o BatchMode=yes "$PLAYLIST" "$PI:$REMOTE/channels.m3u"
-ssh -o BatchMode=yes "$PI" "sh $REMOTE/pi-run.sh $SECONDS_TO_RUN '$SCRIPT'"
+ssh -o BatchMode=yes "$PI" "HARNESS_OPTS='${OPTS:-}' sh $REMOTE/pi-run.sh $SECONDS_TO_RUN '$SCRIPT'"
 rm -rf "$OUT" && mkdir -p "$OUT"
 scp -q -o BatchMode=yes "$PI:$REMOTE/shots/*.png" "$PI:$REMOTE/run.log" "$PI:$REMOTE/cpu.txt" "$OUT/" 2>/dev/null || true
 grep -E "playing ch|NO SIGNAL|stats:" "$OUT/run.log" || true
