@@ -79,12 +79,21 @@ say "[$SLOT] now launches RetroTV"
 if [[ ! -f "$STORAGE/retrotv/playlist.txt" ]]; then
   cat >"$STORAGE/retrotv/playlist.txt" <<'TEMPLATE'
 # RetroTV playlist
-# Put your M3U playlist link (or a full path to an .m3u file) on the first
-# line that doesn't start with #, then open RetroTV. For example, Dispatcharr:
-#   http://<server-ip>:9191/output/m3u/<channel-profile>
-# The TV guide comes from the playlist's x-tvg-url. To use another guide
-# (XMLTV, .xml or .xml.gz, link or path), add a line like:
+#
+# CHANNELS: the first line that doesn't start with # is your channel list,
+# either an M3U link (http://...) or the full path to an .m3u file.
+#   Dispatcharr:  http://<server>:9191/output/m3u/<channel-profile>
+#   Tunarr:       http://<server>:8088/api/channels.m3u
+#
+# TV GUIDE: taken from the playlist automatically (its x-tvg-url).
+# To use a different guide, or if your playlist has none, remove the #
+# in front of the epg= line below and put in an XMLTV link or path
+# (.xml or .xml.gz):
 #   epg=http://<server>/guide.xml.gz
+#
+# Lines starting with # are ignored. Close and reopen RetroTV after a change.
+# Put your channel list link on the next line:
+
 TEMPLATE
   say "created $STORAGE/retrotv/playlist.txt - put your M3U link in it"
 fi
