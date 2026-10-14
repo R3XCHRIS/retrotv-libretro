@@ -17,6 +17,7 @@ static const struct { const char *key, *desc, *info; } CATS[] = {
   { "picture", "Picture", "Video size, zoom and refresh rate." },
   { "sound", "Sound", "Volume leveller and tuning sounds." },
   { "interface", "Interface", "Banner, clock and on-screen hints." },
+  { "remote", "Remote control", "Change channel from Zaparoo, a script or a phone." },
 };
 
 static const opt_def OPTS[] = {
@@ -59,6 +60,9 @@ static const opt_def OPTS[] = {
   { "retrotv_static_sound", "Tuning static sound",
     "Volume of the hiss while a channel tunes.",
     "sound", "normal", { { "normal", "Normal" }, { "quiet", "Quiet" }, { "off", "Off" } } },
+  { "retrotv_remote", "Remote control",
+    "Tune by web request on port 7474, e.g. /tune?ch=36. This device only: Zaparoo and scripts on the Pi. Home network: also phones and computers on your network, with no password.",
+    "remote", "local", { { "local", "This device only" }, { "lan", "Home network" }, { "off", "Off" } } },
 };
 #define NOPTS ((int)(sizeof(OPTS) / sizeof(OPTS[0])))
 #define NCATS ((int)(sizeof(CATS) / sizeof(CATS[0])))
@@ -104,6 +108,8 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   o->zoom_default = !strcmp(val("retrotv_zoom_default", get, ctx), "zoom");
   o->zoom_remember = !strcmp(val("retrotv_zoom_remember", get, ctx), "on");
   o->res240 = !strcmp(val("retrotv_resolution", get, ctx), "240");
+  const char *rc = val("retrotv_remote", get, ctx);
+  o->remote = !strcmp(rc, "off") ? 0 : !strcmp(rc, "lan") ? 2 : 1;
 }
 
 void options_defaults(rtv_options *o) { options_parse(o, NULL, NULL); }
