@@ -73,14 +73,26 @@ features are configured in Dispatcharr and selected through the playlist URL:
 
 | File | Role |
 |---|---|
-| `src/retrotv.c` | libretro entry points, input, UI state (banner, list, static, no-signal) |
-| `src/player.c` | one stream: FFmpeg demux/decode thread → video ring (6 frames) + audio ring (3 s); audio is the master clock |
+| File | Role |
+|---|---|
+| `src/retrotv.c` | libretro entry points, input, UI state and screens (banner, list, X menu, setup, welcome), sleep timer, guide fetch thread, saved state |
+| `src/player.c` | a stream per tune: FFmpeg demux/decode thread → video ring (6 frames) + audio ring (3 s), audio is the master clock; old streams closed by a reaper thread; zoom crop, overscan margin, audio track choice |
 | `src/ffapi.c/.h` | FFmpeg functions resolved with `dlopen` by soname. To use a new FFmpeg function, add it to `RETROTV_FF_FUNCS` and call it as `p_<name>` |
 | `src/m3u.c/.h` | IPTV M3U parser (`#EXTINF` tvg-* attributes, `x-tvg-url`, relative paths) |
-| `src/osd.c/.h` | software overlay on the XRGB8888 framebuffer, 8x8 public-domain font |
-| `tests/harness.c` | headless libretro frontend: real-time pacing, scripted button presses, PNG screenshots |
+| `src/plconf.c` | playlist.txt: the playlist line and `epg=` |
+| `src/epg.c` | XMLTV parser (time window, entities, display names), `epg_lookup`, clock and title helpers |
+| `src/gunzip.c` | `.xml.gz` guides via the system zlib (`dlopen`) |
+| `src/guide.c` | TV guide screen |
+| `src/options.c` | core options table (v2 with v0 fallback) → `rtv_options` |
+| `src/osd.c/.h`, `src/theme.c` | software overlay on XRGB8888 (8x8 public-domain font; `vshift` for 240p), colour themes |
+| `src/aspect.c`, `src/loud.c`, `src/lastch.c`, `src/onboard.c`, `src/testcard.c` | bar detection and zoom crop, volume leveller (AGC), last channel and per-channel zoom, setup-screen hints, test card |
+| `tests/harness.c` | headless libretro frontend: real-time pacing, scripted buttons, PNG screenshots, `HARNESS_OPTS`, save dir |
+| `tests/demo/` | demo line-up for screenshots: made-up channels, generated video and guide |
 
-Output is fixed at **640x480 XRGB8888, 4:3, 60 fps, 48 kHz S16 stereo** (CRT
+Every pure module has host tests in `tests/test_*.c` (`make test`).
+
+Output is **640x480 XRGB8888, 4:3** (or 640x240 with the 240p option), 60 Hz or
+50 Hz for 25/50 fps channels, **48 kHz S16 stereo** (CRT
 friendly). Video is scaled to fit with letter- or pillar-boxing. When the
 timestamps jump (channel splices or ad breaks), playback re-syncs instead of
 freezing.
@@ -136,7 +148,12 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
 - Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
   and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
   `/media/sd/captures/<system>/`. `get_info` reports the display refresh (50/60 Hz).
-- Update flow: CI artifact `retrotv-aarch64` → `<storage>/retrotv/` → re-run the installer.
+- Users install with the one-liner (`install.sh` at the repo root, `curl … | bash` on the Pi as root):
+  it downloads the latest GitHub Release, checks `SHA256SUMS`, copies the core and the
+  Extras scripts (install, uninstall, update) and runs `retrotv_install.sh`. Releases are
+  made by `.github/workflows/release.yml` when a `v*` tag is pushed; bump `RETROTV_VERSION`.
+  Test the installer against a local copy of the release with `RETROTV_BASE=file:///dir`.
+- Screenshots for the docs: `PI=root@<pi> scripts/demo-shots.sh` (demo line-up, never real channels).
 - The long-term fix is an official "user cores" hook from the ReplayOS author.
 
 ## Roadmap and design
