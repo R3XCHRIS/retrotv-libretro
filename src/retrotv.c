@@ -46,7 +46,9 @@ static retro_log_printf_t log_cb;
 
 static m3u_list chans;
 static player *pl;
-static uint32_t fb[PLAYER_W * PLAYER_H];
+static uint32_t fb[PLAYER_W * PLAYER_H];   /* what we send: 640x480, or 640x240 in its top half */
+static uint32_t vid[PLAYER_W * PLAYER_H];  /* 240p: the player's 640x480 picture before halving */
+static int res240;                          /* output mode in use (opts.res240 is the wish) */
 static int16_t abuf[AFRAMES_MAX * 2];
 static size_t cur, prev;
 static double banner_until;
@@ -92,7 +94,7 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
-enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
 static int sleep_warned;             /* "SLEEP 1" shown */
@@ -143,6 +145,21 @@ static void logf_(enum retro_log_level lvl, const char *fmt, ...)
 }
 
 static double t_now(void) { return t_clock; }
+
+/* the surface to draw on: logical 640x480, half the rows in 240p */
+static osd_surface screen(void) { return (osd_surface){ fb, PLAYER_W, PLAYER_H, PLAYER_W, res240 }; }
+static void present(void) { video_cb(fb, PLAYER_W, res240 ? PLAYER_H / 2 : PLAYER_H, PLAYER_W * sizeof(uint32_t)); }
+
+/* 240p: average each pair of lines of the 640x480 picture into one */
+static void halve_lines(const uint32_t *src, uint32_t *dst)
+{
+  for (int y = 0; y < PLAYER_H / 2; y++) {
+    const uint32_t *a = src + (size_t)(2 * y) * PLAYER_W, *b = a + PLAYER_W;
+    uint32_t *o = dst + (size_t)y * PLAYER_W;
+    for (int x = 0; x < PLAYER_W; x++)
+      o[x] = ((a[x] & 0xfefefe) >> 1) + ((b[x] & 0xfefefe) >> 1) + (a[x] & b[x] & 0x010101);
+  }
+}
 static size_t aframes(void) { return (size_t)(PLAYER_RATE / fps_out); }
 
 /* One line per channel visit: frames shown and dropped, A/V skew. */
@@ -333,7 +350,7 @@ static int wrap1(osd_surface *s, int x, int y, const char *t, int cols, uint32_t
     memcpy(line, t, (size_t)cut);
     line[cut] = '\0';
     osd_text(s, x, y, line, 1, rgb);
-    y += 12;
+    y += osd_line_h(s);
     t += cut;
   }
   return y;
@@ -723,13 +740,40 @@ static void send_audio(void)
 
 static void follow_refresh(double fps);
 
+static int saved_leveller = -1, saved_res240 = -1;  /* last values from System Settings */
+
+/* Read the frontend's options. The X menu can change the leveller and the
+ * output for the session; those stay until their own saved value changes. */
 static void apply_options(void)
 {
+  int lev = opts.leveller, r240 = opts.res240;
   options_read(&opts, env_cb);
+  if (saved_leveller >= 0 && opts.leveller == saved_leveller) opts.leveller = lev;
+  else saved_leveller = opts.leveller;
+  if (saved_res240 >= 0 && opts.res240 == saved_res240) opts.res240 = r240;
+  else saved_res240 = opts.res240;
+  if (!pl) res240 = opts.res240;                     /* at load the frontend asks for the size next */
   loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
   theme_set(opts.theme);
   if (pl) player_set_margin(pl, opts.overscan);
   gv.clock24 = opts.clock24;
+}
+
+/* 480 <-> 240p while running (only from retro_run) */
+static void set_output(int r240)
+{
+  if (r240 == res240) return;
+  int was = res240;
+  res240 = r240;
+  struct retro_system_av_info av;
+  retro_get_system_av_info(&av);
+  if (env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av)) {
+    opts.res240 = r240;
+    logf_(RETRO_LOG_INFO, "output %s", res240 ? "640x240 (240p)" : "640x480");
+  } else {
+    res240 = opts.res240 = was;
+    logf_(RETRO_LOG_WARN, "frontend refused the %s output", r240 ? "240p" : "480-line");
+  }
 }
 
 /* the user changed something in the frontend's menu */
@@ -739,10 +783,10 @@ static void check_options(void)
   if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &upd) && upd) {
     apply_options();
     follow_refresh(0);                               /* a refresh lock applies right away */
-  logf_(RETRO_LOG_INFO, "core options: %s", options_version == 2 ? "v2" : options_version == 1 ? "v0 variables" : "not supported by frontend");
-    logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s", opts.banner_secs,
+    set_output(opts.res240);
+    logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s, output %s", opts.banner_secs,
           opts.clock24 ? "24h" : "12h", opts.leveller == 2 ? "loud" : opts.leveller ? "normal" : "off",
-          opts.static_vol, opts.hints ? "on" : "off");
+          opts.static_vol, opts.hints ? "on" : "off", res240 ? "240p" : "480");
   }
 }
 
@@ -869,6 +913,7 @@ static void draw_qmenu(osd_surface *s)
       break;
     case QM_LEVEL: label = "Leveller"; snprintf(val, sizeof(val), "%s", LEVELLER_NAMES[opts.leveller]); break;
     case QM_ZOOM: label = "Picture"; snprintf(val, sizeof(val), "%s", zoom ? "Zoom" : "Fit"); break;
+    case QM_OUTPUT: label = "Output"; snprintf(val, sizeof(val), "%s", res240 ? "240p" : "480"); break;
     case QM_TESTCARD: label = "Test card"; break;
     case QM_HELP: label = "Show controls"; break;
     case QM_CLOSE: label = "Close"; break;
@@ -963,6 +1008,7 @@ static void handle_input(void)
     if (dir && qm_sel == QM_AUDIO) step_audio(dir);
     if (dir && qm_sel == QM_LEVEL) step_leveller(dir);
     if (dir && qm_sel == QM_ZOOM) set_zoom(!zoom);
+    if (dir && qm_sel == QM_OUTPUT) { set_output(!res240); show_toast(res240 ? "240P" : "480"); }
     if (FACE(PAD_A) && qm_sel == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
     if (FACE(PAD_A) && qm_sel == QM_HELP) { qm_open = 0; welcome_on = 1; }
     if ((FACE(PAD_A) && qm_sel == QM_CLOSE) || FACE(PAD_B) || FACE(PAD_X)) qm_open = 0;
@@ -1045,7 +1091,7 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info)
 {
   memset(info, 0, sizeof(*info));
   info->geometry.base_width = PLAYER_W;
-  info->geometry.base_height = PLAYER_H;
+  info->geometry.base_height = res240 ? PLAYER_H / 2 : PLAYER_H;
   info->geometry.max_width = PLAYER_W;
   info->geometry.max_height = PLAYER_H;
   info->geometry.aspect_ratio = 4.0f / 3.0f;
@@ -1066,6 +1112,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   char err[256];
   if (ffapi_load(err, sizeof(err))) { logf_(RETRO_LOG_ERROR, "FFmpeg: %s", err); return false; }
   apply_options();
+  logf_(RETRO_LOG_INFO, "core options: %s", options_version == 2 ? "v2" : options_version == 1 ? "v0 variables" : "not supported by frontend");
   p_av_log_set_level(AV_LOG_FATAL);   /* joining live streams mid-GOP logs harmless h264 errors */
   p_avformat_network_init();
 
@@ -1139,19 +1186,19 @@ RETRO_API void retro_run(void)
   if (asleep) {                                      /* switched off: black and silent */
     memset(fb, 0, sizeof(fb));
     memset(abuf, 0, sizeof(abuf));
-    video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+    present();
     audio_batch_cb(abuf, aframes());
     frame_no++;
     t_clock += 1.0 / fps_out;
     return;
   }
   if (testcard_on) {
-    osd_surface ts = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
+    osd_surface ts = screen();
     char clk[12];
     epg_clock(time(NULL), opts.clock24, 1, clk, sizeof(clk));
     testcard_draw(&ts, testcard_side(tc_t), clk);
     testcard_audio(abuf, aframes(), PLAYER_RATE, tc_t, &tc_phase);
-    video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+    present();
     audio_batch_cb(abuf, aframes());
     tc_t += 1.0 / fps_out;
     frame_no++;
@@ -1159,10 +1206,10 @@ RETRO_API void retro_run(void)
     return;
   }
   if (!chans.count) {
-    osd_surface hs = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
+    osd_surface hs = screen();
     draw_help(&hs);
     memset(abuf, 0, sizeof(abuf));
-    video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+    present();
     audio_batch_cb(abuf, aframes());
     frame_no++;
     t_clock += 1.0 / fps_out;
@@ -1213,8 +1260,9 @@ RETRO_API void retro_run(void)
   if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
     last_save_async(cur);
 
-  osd_surface s = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
-  int have = player_video(pl, fb);
+  osd_surface s = screen();
+  int have = player_video(pl, res240 ? vid : fb);
+  if (res240 && have) halve_lines(vid, fb);
   if (st == PLAYER_ERROR) {
     draw_no_signal(&s);
   } else if (st != PLAYER_PLAYING && !have) {
@@ -1250,7 +1298,7 @@ RETRO_API void retro_run(void)
     for (size_t i = 0; i < aframes() * 2; i++) abuf[i] = (int16_t)(abuf[i] * lvl);
   }
 
-  video_cb(fb, PLAYER_W, PLAYER_H, PLAYER_W * sizeof(uint32_t));
+  present();
   send_audio();
   frame_no++;
   t_clock += 1.0 / fps_out;

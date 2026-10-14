@@ -19,6 +19,7 @@ typedef struct {
   int refresh;             /* 0 auto (follow the stream), 50, 60 */
   int zoom_default;        /* 0 FIT, 1 ZOOM for channels without a remembered choice */
   int zoom_remember;       /* remember Y per channel */
+  int res240;              /* output 640x240 (240p) instead of 640x480 */
 } rtv_options;
 
 /* Defaults, as declared in the table. */

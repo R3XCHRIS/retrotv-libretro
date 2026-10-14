@@ -101,7 +101,7 @@ static void wrap(osd_surface *s, int x, int y, const char *text, int cols, int l
     memcpy(buf, p, (size_t)cut);
     buf[cut] = '\0';
     if (ln == lines - 1 && len > cut) strcat(buf, "...");
-    osd_text(s, x, y + ln * 12, buf, 1, rgb);
+    osd_text(s, x, y + ln * osd_line_h(s), buf, 1, rgb);
     p += cut;
   }
 }
@@ -110,14 +110,16 @@ static void draw_preview(osd_surface *s)
 {
   /* shrink the 640x480 picture already in the framebuffer by 4 (nearest),
    * before anything is drawn over it */
+  /* (in 240p both the picture and the window have half the rows; the ratio stays 4) */
   static uint32_t pv[PV_W * PV_H];
-  for (int y = 0; y < PV_H; y++)
+  int ph = PV_H >> s->vshift;
+  for (int y = 0; y < ph; y++)
     for (int x = 0; x < PV_W; x++)
       pv[y * PV_W + x] = s->px[(size_t)(y * 4 + 2) * s->pitch + x * 4 + 2];
   osd_fill(s, 0, 0, s->w, s->h, BG, 255);
   osd_fill(s, L - 2, TOP - 2, PV_W + 4, PV_H + 4, GOLD, 255);
-  for (int y = 0; y < PV_H; y++)
-    memcpy(&s->px[(size_t)(TOP + y) * s->pitch + L], &pv[y * PV_W], PV_W * 4);
+  for (int y = 0; y < ph; y++)
+    memcpy(&s->px[(size_t)((TOP >> s->vshift) + y) * s->pitch + L], &pv[y * PV_W], PV_W * 4);
 }
 
 static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, const guide_view *v)
@@ -146,7 +148,7 @@ static void draw_info(osd_surface *s, const m3u_list *l, const epg_prog *p, cons
   if (p->desc) {
     char d[512];
     epg_ascii(p->desc, d, sizeof(d));
-    wrap(s, x, TOP + 60, d, cols, 5, DIM);
+    wrap(s, x, TOP + 60, d, cols, s->vshift ? 3 : 5, DIM);     /* taller lines in 240p */
   }
 }
 
@@ -183,8 +185,8 @@ void guide_draw(osd_surface *s, const m3u_list *l, const epg *g, const guide_vie
     osd_fill(s, L, y, CH_W, ROW_H - 2, sel ? CELL_SEL : CELL, 255);
     label(c->number, num, sizeof(num), 5);
     label(c->name, name, sizeof(name), (CH_W - 12) / 8);
-    osd_text_shadow(s, L + 6, y + 4, num, 2, i == playing ? GOLD : YELLOW);
-    osd_text(s, L + 6, y + 24, name, 1, WHITE);
+    osd_text_shadow(s, L + 6, y + (s->vshift ? 2 : 4), num, 2, i == playing ? GOLD : YELLOW);
+    osd_text(s, L + 6, y + (s->vshift ? 20 : 24), name, 1, WHITE);   /* 1x is 8 rows tall in 240p */
 
     int n = guide_cells(guide_chan(g, c), v->t0, GUIDE_SPAN, GX, GW, cells, 24);
     osd_fill(s, GX, y, GW, ROW_H - 2, TH->cell_gap, 255);          /* gaps: no info */
