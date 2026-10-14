@@ -29,6 +29,9 @@ static const opt_def OPTS[] = {
   { "retrotv_zoom_remember", "Remember zoom per channel",
     "Keep each channel's Fit/Zoom choice from the Y button.",
     "picture", "on", { { "on", "On" }, { "off", "Off" } } },
+  { "retrotv_resolution", "Output",
+    "640x240 (240p) is progressive like old consoles on a CRT: no interlace flicker, half the vertical detail.",
+    "picture", "480", { { "480", "640x480" }, { "240", "640x240 (240p)" } } },
   { "retrotv_refresh", "Refresh rate",
     "Auto switches to 50 Hz for 25/50 fps channels so motion is smooth. Lock it if your screen dislikes mode changes.",
     "picture", "auto", { { "auto", "Auto (follow the channel)" }, { "60", "60 Hz" }, { "50", "50 Hz" } } },
@@ -100,6 +103,7 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   o->refresh = !strcmp(r, "auto") ? 0 : atoi(r);
   o->zoom_default = !strcmp(val("retrotv_zoom_default", get, ctx), "zoom");
   o->zoom_remember = !strcmp(val("retrotv_zoom_remember", get, ctx), "on");
+  o->res240 = !strcmp(val("retrotv_resolution", get, ctx), "240");
 }
 
 void options_defaults(rtv_options *o) { options_parse(o, NULL, NULL); }

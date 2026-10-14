@@ -53,7 +53,7 @@ int main(void)
   CHECK(right_silent);
 
   uint32_t *px = calloc(640 * 480, 4);                               /* draws without crashing */
-  osd_surface s = { px, 640, 480, 640 };
+  osd_surface s = { px, 640, 480, 640, 0 };
   testcard_draw(&s, 3, "20:40");
   CHECK(px[10 * 640 + 10] == OSD_RGB(191, 191, 191) && px[10 * 640 + 630] == OSD_RGB(0, 0, 191));
   free(px);

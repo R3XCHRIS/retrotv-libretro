@@ -21,6 +21,9 @@ void osd_fill(osd_surface *s, int x, int y, int w, int h, uint32_t rgb, int alph
 {
   int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
   int x1 = x + w > s->w ? s->w : x + w, y1 = y + h > s->h ? s->h : y + h;
+  y0 >>= s->vshift;                                  /* logical -> buffer rows */
+  y1 >>= s->vshift;
+  if (y1 <= y0 && h > 0 && y0 < osd_rows(s)) y1 = y0 + 1;   /* thin rules survive halving */
   for (int j = y0; j < y1; j++) {
     uint32_t *row = s->px + (size_t)j * (size_t)s->pitch;
     for (int i = x0; i < x1; i++) row[i] = blend(row[i], rgb, alpha);
@@ -42,10 +45,12 @@ int osd_text(osd_surface *s, int x, int y, const char *text, int scale, uint32_t
       unsigned bits = (unsigned char)glyph[row];
       for (int col = 0; col < 8; col++) {
         if (!(bits & (1u << col))) continue;   /* bit 0 is the leftmost pixel */
-        int px = cx + col * scale, py = y + row * scale;
-        for (int dy = 0; dy < scale; dy++) {
+        /* rows per glyph row: scale, halved in 240p but never below 1 */
+        int rs = scale >> s->vshift ? scale >> s->vshift : 1;
+        int px = cx + col * scale, py = (y >> s->vshift) + row * rs;
+        for (int dy = 0; dy < rs; dy++) {
           int yy = py + dy;
-          if (yy < 0 || yy >= s->h) continue;
+          if (yy < 0 || yy >= osd_rows(s)) continue;
           uint32_t *line = s->px + (size_t)yy * (size_t)s->pitch;
           for (int dx = 0; dx < scale; dx++) {
             int xx = px + dx;
@@ -61,14 +66,15 @@ int osd_text(osd_surface *s, int x, int y, const char *text, int scale, uint32_t
 
 int osd_text_shadow(osd_surface *s, int x, int y, const char *text, int scale, uint32_t rgb)
 {
-  osd_text(s, x + scale, y + scale, text, scale, OSD_RGB(0, 0, 0));
+  int dy = s->vshift && scale < 2 ? 2 : scale;       /* a full buffer row down in 240p */
+  osd_text(s, x + scale, y + dy, text, scale, OSD_RGB(0, 0, 0));
   return osd_text(s, x, y, text, scale, rgb);
 }
 
 void osd_static(osd_surface *s, uint32_t *seed)
 {
   uint32_t x = *seed ? *seed : 0x9e3779b9u;
-  for (int j = 0; j < s->h; j++) {
+  for (int j = 0; j < osd_rows(s); j++) {
     uint32_t *row = s->px + (size_t)j * (size_t)s->pitch;
     /* faint horizontal banding like a detuned set */
     int band = ((j + (int)(x & 63)) / 3) % 7 == 0 ? 30 : 0;
@@ -87,8 +93,9 @@ void osd_static(osd_surface *s, uint32_t *seed)
 
 void osd_static_vhs(osd_surface *s, uint32_t *seed, unsigned frame)
 {
-  int band = (int)((frame * 3u) % (unsigned)(s->h + 60)) - 30;     /* tracking band rolls down */
-  for (int y = 0; y < s->h; y++) {
+  int rows = osd_rows(s);
+  int band = (int)((frame * 3u) % (unsigned)(rows + 60)) - 30;      /* tracking band rolls down */
+  for (int y = 0; y < rows; y++) {
     uint32_t *row = s->px + (size_t)y * (size_t)s->pitch;
     int dist = y - band, in_band = dist > -18 && dist < 18;
     *seed ^= *seed << 13; *seed ^= *seed >> 17; *seed ^= *seed << 5;
