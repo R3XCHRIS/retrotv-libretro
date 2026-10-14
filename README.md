@@ -1,54 +1,192 @@
-# RetroTV (libretro core) — prototype
+# RetroTV
 
-Flip through live IPTV channels from an M3U playlist like a 90s cable box, as a
-libretro core for **ReplayOS on the Raspberry Pi 5**.
+**Flip through live TV like it's 1993.** RetroTV is a libretro core that turns an
+IPTV playlist into a 90s cable box for **ReplayOS on the Raspberry Pi 5**: channel
+up and down, a channel banner with what's on now and next, a scrolling TV guide,
+static between channels and a blue NO SIGNAL screen. It's made for CRTs, with a
+real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to install.
 
-- Channel up/down, last channel, info banner, channel list
-- Static and hiss while tuning, blue **NO SIGNAL** screen
-- Zoom button (FIT/ZOOM) for letterboxed pictures; 50 Hz output on 25/50 fps channels
-- Plays live MPEG-TS/HLS over HTTP using ReplayOS's own FFmpeg (nothing to install on the Pi)
+<p align="center">
+  <img src="docs/screenshots/banner.png" width="400" alt="Channel banner with now and next">
+  <img src="docs/screenshots/guide.png" width="400" alt="TV guide with live preview">
+</p>
 
-> **Status:** early prototype. It runs inside ReplayOS 2.0.60 by borrowing the
-> PiBench slot (below). See [CLAUDE.md](CLAUDE.md) for build,
-> test and design notes, and [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
+> The screenshots use RetroTV's demo line-up: made-up channels with
+> FFmpeg-generated pictures (`tests/demo/`). With your own playlist you'll see
+> your channels.
 
-## Controls (prototype)
+## Features
 
-Button names are the labels on an Xbox-style pad (ReplayOS maps pads by position).
+- **Channel surfing:** up/down, last channel, channel list, static and hiss while tuning, NO SIGNAL
+- **Now / Next banner** and a **TV guide** (90-minute grid, live preview, programme details) from your XMLTV guide
+- **Picks up where you left off:** remembers the last channel you watched
+- **Made for CRTs:** 4:3, 50 Hz on 25/50 fps channels (smooth PAL), optional **240p**, overscan margin
+- **Zoom button** to fill the screen with letterboxed 16:9 pictures, remembered per channel
+- **Volume leveller** so loud and quiet channels sound alike
+- **Sleep timer**, audio track choice, **colour themes** and a VHS tuning look
+- **Built-in test card** and a setup screen that explains what's wrong in plain words
+- Works with **Dispatcharr**, **Tunarr** or any M3U playlist with MPEG-TS or HLS streams
+
+## Install
+
+You need **ReplayOS on a Raspberry Pi 5** with internet access.
+
+**Option 1: one line over SSH** (ReplayOS's root password is `replayos` unless you changed it):
+
+```bash
+ssh root@replay.local
+```
+```bash
+curl -fsSL https://raw.githubusercontent.com/R3XCHRIS/retrotv-libretro/main/install.sh | bash
+```
+
+**Option 2: from the TV, no SSH.** Copy
+[`replayos/retrotv_update.sh`](replayos/retrotv_update.sh) to `roms/_extra/` on your
+ReplayOS storage (the SD card, USB drive or network share), then run
+**Extra → retrotv_update.sh**.
+
+Either way, the installer:
+- downloads the latest release and checks its SHA-256 sums;
+- copies the core to `<storage>/retrotv/`;
+- creates a commented `playlist.txt` there if you don't have one;
+- adds **retrotv_update.sh** and **retrotv_uninstall.sh** to Extras;
+- restarts ReplayOS.
+
+Then:
+
+1. Open `retrotv/playlist.txt` on your storage and put your playlist link on its own line (see below).
+2. On the TV, open **Extra → audio_video_test**. That's RetroTV (see [Why the A/V test slot](#why-the-av-test-slot)).
+
+**Update** with **Extra → retrotv_update.sh**. **Uninstall** with
+**Extra → retrotv_uninstall.sh**, which gives the slot back to the A/V test
+pattern. Re-run the installer after a ReplayOS update, because updates replace the
+system files.
+
+## Your channels: `playlist.txt`
+
+The first line that doesn't start with `#` is your channel list: an M3U link or
+the full path to an `.m3u` file.
+
+```
+# Dispatcharr (a channel profile)
+http://<dispatcharr>:9191/output/m3u/<channel-profile>
+
+# or Tunarr
+http://<tunarr>:8088/api/channels.m3u
+```
+
+**TV guide.** RetroTV uses the guide link in the playlist (`x-tvg-url`)
+automatically. To use a different guide, or if your playlist has none, add an
+`epg=` line with an XMLTV link or path (`.xml` or `.xml.gz`):
+
+```
+epg=http://example.org/guide.xml.gz
+```
+
+Guide listings are matched to channels by `tvg-id`, then by channel name (so a
+guide from another source works), then by channel number.
+
+If something's wrong, RetroTV shows a setup screen that says what happened
+(server not found, 404, not a playlist, ...) and where the file is. Press **A**
+there for the test card, which checks picture, sound and stereo.
+
+<p align="center">
+  <img src="docs/screenshots/setup.png" width="400" alt="Setup screen">
+  <img src="docs/screenshots/test-card.png" width="400" alt="Test card">
+</p>
+
+## Controls
+
+Button names are the labels on an Xbox-style pad.
 
 | Button | Action |
 |---|---|
-| D-pad Up / R | Channel up |
-| D-pad Down / L | Channel down |
-| A | Show info banner |
+| Up / Down (or R / L) | Channel up / down |
+| A | What's on (banner) |
 | B | Last channel |
-| Y | Zoom: letterboxed (FIT) or filled 4:3 (ZOOM), remembered per channel |
-| Select | Channel list (Up/Down, A to tune, B to close) |
-| Start | TV guide (Up/Down channel, Left/Right 30 min, A to watch, B or Start to close) |
-| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, output 480/240p, test card, show controls. Leveller and output last for the session; their saved defaults are in System Settings |
+| Y | Zoom: letterboxed (Fit) or fill the screen (Zoom), remembered per channel |
+| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls |
+| Start | TV guide: Up/Down channel, Left/Right 30 minutes, A to watch, B to close |
+| Select | Channel list |
 
-## Install on ReplayOS (borrows the A/V test slot)
+<p align="center">
+  <img src="docs/screenshots/menu.png" width="266" alt="X menu">
+  <img src="docs/screenshots/channel-list.png" width="266" alt="Channel list">
+  <img src="docs/screenshots/welcome.png" width="266" alt="Welcome screen with the controls">
+</p>
 
-ReplayOS can't add new systems yet, so RetroTV takes over **Extra → audio_video_test**
-(the `pibench` slot is muted by ReplayOS, so it isn't used).
-`<storage>` is your ReplayOS storage (`/media/nfs`, `/media/usb`, `/media/nvme` or `/media/sd`).
+<p align="center">
+  <img src="docs/screenshots/fit.png" width="266" alt="16:9 channel letterboxed (Fit)">
+  <img src="docs/screenshots/zoom.png" width="266" alt="Same channel zoomed">
+  <img src="docs/screenshots/no-signal.png" width="266" alt="NO SIGNAL">
+</p>
 
-1. Copy `retrotv_libretro.so` (CI artifact `retrotv-aarch64`) to `<storage>/retrotv/`.
-2. Put your M3U URL (or a path) on the first line of `<storage>/retrotv/playlist.txt`.
-   The TV guide comes from the playlist's `x-tvg-url`. To use a different guide, or if your
-   playlist has none, add a line `epg=<URL or path>` (XMLTV, `.xml` or `.xml.gz`):
-   ```
-   http://dispatcharr:9191/output/m3u/my-profile
-   epg=http://example.org/guide.xml.gz
-   ```
-   Channels are matched to the guide by `tvg-id`, then by name (so a guide from another
-   source works), then by channel number (own guide only).
-3. Copy `replayos/retrotv_install.sh` and `retrotv_uninstall.sh` to `<storage>/roms/_extra/`.
-4. Run **Extra → retrotv_install.sh** (or `bash <storage>/roms/_extra/retrotv_install.sh` as root).
-   It backs up `cores.cfg`, points `[avtest]` at RetroTV and restarts ReplayOS.
-5. Open **Extra → audio_video_test**.
+## Settings
 
-Re-run the installer after each ReplayOS update. `retrotv_uninstall.sh` gives the slot back to the A/V test pattern.
+**System Settings** is in the ReplayOS in-game menu. That's where you set your
+defaults, and ReplayOS saves them. The **X menu** is for quick changes while you
+watch: they apply immediately and last until you quit.
+
+| Group | Setting | Choices |
+|---|---|---|
+| Picture | Overscan margin | None, 5 %, 10 % (shrinks the video so its edges stay visible) |
+| | Picture | Fit, Zoom (default for channels you haven't zoomed) |
+| | Remember zoom per channel | On, Off |
+| | Output | 640x480, 640x240 (240p) |
+| | Refresh rate | Auto (50 Hz for 25/50 fps channels), 60 Hz, 50 Hz |
+| Sound | Volume leveller | Normal, Loud, Off |
+| | Tuning static sound | Normal, Quiet, Off |
+| | Channel-change sound | Off, On |
+| Interface | Banner timeout | 2, 4, 8 seconds, Off |
+| | Clock | 24-hour, 12-hour |
+| | Button hints | On, Off |
+| | Colour theme | Cable Navy, Teletext, Green Phosphor |
+| | Tuning picture | Classic snow, VHS |
+
+<p align="center">
+  <img src="docs/screenshots/theme-teletext.png" width="266" alt="Teletext theme">
+  <img src="docs/screenshots/guide-phosphor.png" width="266" alt="Green Phosphor guide">
+  <img src="docs/screenshots/tuning-vhs.png" width="266" alt="VHS tuning picture">
+</p>
+
+### 240p
+
+**System Settings → Picture → Output → 640x240 (240p)**, or **X → Output**.
+ReplayOS switches the CRT to a progressive 240-line mode (2560x240), like an old
+console: no interlace flicker, half the vertical detail. Video lines are blended
+in pairs, and the menus are drawn at 240 lines so the text stays sharp. It's off
+by default because TV broadcasts look best at 480 lines.
+
+<p align="center">
+  <img src="docs/screenshots/banner-240p.png" width="400" alt="Banner in 240p">
+  <img src="docs/screenshots/guide-240p.png" width="400" alt="Guide in 240p">
+</p>
+
+## Servers
+
+- **Dispatcharr:** use a **Channel Profile** to choose which channels RetroTV
+  shows: `/output/m3u/<profile>`. The guide (`/output/epg/<profile>`) comes along
+  automatically. Allow the Pi under Dispatcharr's network access for M3U/EPG.
+  RetroTV doesn't use Dispatcharr's API and needs no key.
+- **Tunarr:** use `/api/channels.m3u`, not `/stream/channels/N.m3u8` (that's a
+  single channel's video). The guide comes along.
+- **Anything else:** an M3U with HTTP(S) MPEG-TS or HLS streams. Add `epg=` for a guide.
+
+## Why the A/V test slot
+
+ReplayOS can't add new systems yet, so RetroTV borrows the
+**Extra → audio_video_test** slot. The PiBench slot was tried first, but
+ReplayOS mutes its sound. The uninstaller gives the slot back. A proper RetroTV
+entry needs a user-cores option in ReplayOS itself.
+
+## Troubleshooting
+
+- **Setup screen instead of channels:** it says what's wrong. Check the link in
+  `playlist.txt` from another computer.
+- **No guide:** check the playlist has `x-tvg-url`, or add `epg=`.
+- **A channel stays on TUNING:** cold IPTV channels can take 5–10 s, and RetroTV
+  retries 3 times before NO SIGNAL.
+- **Log:** `/tmp/retrotv.log` on the Pi (`ssh root@replay.local`).
 
 ## Build
 
@@ -57,7 +195,13 @@ pip install ziglang==0.13.0
 make deps && make test && make
 ```
 
-## AI Transparency
+This cross-builds `build/retrotv_libretro.so` for the Pi 5 (aarch64) and runs
+the host unit tests. Releases are built by CI when a `v*` tag is pushed. For
+development (tests on the Pi, the screenshot demo, architecture), see
+[CLAUDE.md](CLAUDE.md), [docs/ROADMAP.md](docs/ROADMAP.md) and
+[docs/DESIGN.md](docs/DESIGN.md).
+
+## AI transparency
 
 This project was developed with significant AI assistance (primarily Claude by
 Anthropic). The author reviews, understands, tests, and maintains all code. See
@@ -67,4 +211,4 @@ Anthropic). The author reviews, understands, tests, and maintains all code. See
 
 MIT licensed. Third-party code: `include/libretro.h` (MIT, The RetroArch team)
 and `src/font8x8_basic.h` (public domain, Daniel Hepper / IBM VGA font). Not
-affiliated with ReplayOS, libretro or Dispatcharr.
+affiliated with ReplayOS, libretro, Dispatcharr or Tunarr.
