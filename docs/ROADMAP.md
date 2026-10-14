@@ -99,7 +99,8 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] Picture options: overscan margin 0/5/10 % (video only; menus stay in the safe area), default Fit/Zoom,
   remember Y per channel (saved next to the last channel)
 - [x] Output 640x240 (240p), off by default: video lines averaged in pairs, menus drawn straight at 240 lines
-  (small text keeps 8 rows), switchable while running
+  (small text keeps 8 rows), switchable while running from System Settings or the X menu; ReplayOS switches
+  the CRT to 2560x240 @ 60 Hz (verified)
 - [ ] 16:9 output for LCDs (deferred)
 - [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
 - [x] Refresh option: Auto (follow the channel) / 60 Hz / 50 Hz, applied as soon as it changes

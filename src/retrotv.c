@@ -94,7 +94,7 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
-enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
 static int sleep_warned;             /* "SLEEP 1" shown */
@@ -740,14 +740,40 @@ static void send_audio(void)
 
 static void follow_refresh(double fps);
 
+static int saved_leveller = -1, saved_res240 = -1;  /* last values from System Settings */
+
+/* Read the frontend's options. The X menu can change the leveller and the
+ * output for the session; those stay until their own saved value changes. */
 static void apply_options(void)
 {
+  int lev = opts.leveller, r240 = opts.res240;
   options_read(&opts, env_cb);
+  if (saved_leveller >= 0 && opts.leveller == saved_leveller) opts.leveller = lev;
+  else saved_leveller = opts.leveller;
+  if (saved_res240 >= 0 && opts.res240 == saved_res240) opts.res240 = r240;
+  else saved_res240 = opts.res240;
   if (!pl) res240 = opts.res240;                     /* at load the frontend asks for the size next */
   loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
   theme_set(opts.theme);
   if (pl) player_set_margin(pl, opts.overscan);
   gv.clock24 = opts.clock24;
+}
+
+/* 480 <-> 240p while running (only from retro_run) */
+static void set_output(int r240)
+{
+  if (r240 == res240) return;
+  int was = res240;
+  res240 = r240;
+  struct retro_system_av_info av;
+  retro_get_system_av_info(&av);
+  if (env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av)) {
+    opts.res240 = r240;
+    logf_(RETRO_LOG_INFO, "output %s", res240 ? "640x240 (240p)" : "640x480");
+  } else {
+    res240 = opts.res240 = was;
+    logf_(RETRO_LOG_WARN, "frontend refused the %s output", r240 ? "240p" : "480-line");
+  }
 }
 
 /* the user changed something in the frontend's menu */
@@ -757,22 +783,10 @@ static void check_options(void)
   if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &upd) && upd) {
     apply_options();
     follow_refresh(0);                               /* a refresh lock applies right away */
-    if (opts.res240 != res240) {                     /* 480 <-> 240p while running */
-      int was = res240;
-      res240 = opts.res240;
-      struct retro_system_av_info av;
-      retro_get_system_av_info(&av);
-      if (env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av))
-        logf_(RETRO_LOG_INFO, "output %s", res240 ? "640x240 (240p)" : "640x480");
-      else {
-        res240 = was;
-        logf_(RETRO_LOG_WARN, "frontend refused the %s output", opts.res240 ? "240p" : "480-line");
-      }
-    }
-  logf_(RETRO_LOG_INFO, "core options: %s", options_version == 2 ? "v2" : options_version == 1 ? "v0 variables" : "not supported by frontend");
-    logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s", opts.banner_secs,
+    set_output(opts.res240);
+    logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s, output %s", opts.banner_secs,
           opts.clock24 ? "24h" : "12h", opts.leveller == 2 ? "loud" : opts.leveller ? "normal" : "off",
-          opts.static_vol, opts.hints ? "on" : "off");
+          opts.static_vol, opts.hints ? "on" : "off", res240 ? "240p" : "480");
   }
 }
 
@@ -899,6 +913,7 @@ static void draw_qmenu(osd_surface *s)
       break;
     case QM_LEVEL: label = "Leveller"; snprintf(val, sizeof(val), "%s", LEVELLER_NAMES[opts.leveller]); break;
     case QM_ZOOM: label = "Picture"; snprintf(val, sizeof(val), "%s", zoom ? "Zoom" : "Fit"); break;
+    case QM_OUTPUT: label = "Output"; snprintf(val, sizeof(val), "%s", res240 ? "240p" : "480"); break;
     case QM_TESTCARD: label = "Test card"; break;
     case QM_HELP: label = "Show controls"; break;
     case QM_CLOSE: label = "Close"; break;
@@ -993,6 +1008,7 @@ static void handle_input(void)
     if (dir && qm_sel == QM_AUDIO) step_audio(dir);
     if (dir && qm_sel == QM_LEVEL) step_leveller(dir);
     if (dir && qm_sel == QM_ZOOM) set_zoom(!zoom);
+    if (dir && qm_sel == QM_OUTPUT) { set_output(!res240); show_toast(res240 ? "240P" : "480"); }
     if (FACE(PAD_A) && qm_sel == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
     if (FACE(PAD_A) && qm_sel == QM_HELP) { qm_open = 0; welcome_on = 1; }
     if ((FACE(PAD_A) && qm_sel == QM_CLOSE) || FACE(PAD_B) || FACE(PAD_X)) qm_open = 0;
@@ -1096,6 +1112,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   char err[256];
   if (ffapi_load(err, sizeof(err))) { logf_(RETRO_LOG_ERROR, "FFmpeg: %s", err); return false; }
   apply_options();
+  logf_(RETRO_LOG_INFO, "core options: %s", options_version == 2 ? "v2" : options_version == 1 ? "v0 variables" : "not supported by frontend");
   p_av_log_set_level(AV_LOG_FATAL);   /* joining live streams mid-GOP logs harmless h264 errors */
   p_avformat_network_init();
 
