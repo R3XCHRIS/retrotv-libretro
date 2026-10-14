@@ -98,7 +98,9 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
   channels measured from -13 to -39 dBFS, so a fixed boost distorted loud ones
 - [x] Picture options: overscan margin 0/5/10 % (video only; menus stay in the safe area), default Fit/Zoom,
   remember Y per channel (saved next to the last channel)
-- [ ] Output: 4:3 (CRT) or 16:9, overscan-safe margins, resolution 640x480 / 320x240 (240p)
+- [x] Output 640x240 (240p), off by default: video lines averaged in pairs, menus drawn straight at 240 lines
+  (small text keeps 8 rows), switchable while running
+- [ ] 16:9 output for LCDs (deferred)
 - [x] Refresh follows the stream: 50 Hz for 25/50 fps channels, else 60 Hz (`SET_SYSTEM_AV_INFO`; ReplayOS switches the CRT mode)
 - [x] Refresh option: Auto (follow the channel) / 60 Hz / 50 Hz, applied as soon as it changes
 - [x] Core options (ReplayOS: System Settings): banner timeout, 12/24 h clock, button hints, volume leveller
