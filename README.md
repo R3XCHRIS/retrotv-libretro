@@ -24,6 +24,7 @@ real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to in
 - **Zoom button** to fill the screen with letterboxed 16:9 pictures, remembered per channel
 - **Volume leveller** so loud and quiet channels sound alike
 - **Sleep timer**, audio track choice, **colour themes** and a VHS tuning look
+- **Remote control** over HTTP: tune a channel from Zaparoo, a script or a phone
 - **Built-in test card** and a setup screen that explains what's wrong in plain words
 - Works with **Dispatcharr**, **Tunarr** or any M3U playlist with MPEG-TS or HLS streams
 
@@ -142,6 +143,7 @@ watch: they apply immediately and last until you quit.
 | | Button hints | On, Off |
 | | Colour theme | Cable Navy, Teletext, Green Phosphor |
 | | Tuning picture | Classic snow, VHS |
+| Remote control | Remote control | This device only, Home network, Off |
 
 <p align="center">
   <img src="docs/screenshots/theme-teletext.png" width="266" alt="Teletext theme">
@@ -161,6 +163,45 @@ by default because TV broadcasts look best at 480 lines.
   <img src="docs/screenshots/banner-240p.png" width="400" alt="Banner in 240p">
   <img src="docs/screenshots/guide-240p.png" width="400" alt="Guide in 240p">
 </p>
+
+## Remote control
+
+While RetroTV is playing, it answers simple web requests on port **7474**:
+
+| Request | Does |
+|---|---|
+| `/tune?ch=36` | tune channel 36 (the number shown on the banner) |
+| `/tune?name=star+trek` | tune by name: exact first, else the first name that contains it |
+| `/up`, `/down`, `/last` | channel up, down, previous |
+| `/status` | what's on, as JSON: channel, name, state, programme |
+
+```bash
+curl http://127.0.0.1:7474/tune?ch=36
+```
+
+A remote tune works like the remote control: it closes any menu, wakes the set
+from the sleep timer, and on the channel already playing just shows the banner.
+
+- **Zaparoo:** write `**http.get:http://127.0.0.1:7474/tune?ch=36` to a tag or
+  card, and tapping it switches channel. (Zaparoo's virtual gamepad works too: RetroTV
+  takes buttons from players 1-4.)
+- **Who can use it:** **System Settings → Remote control**. *This device only*
+  (default) accepts requests from the Pi itself, such as Zaparoo or a script.
+  *Home network* also lets phones and computers on your network change channel,
+  with no password, so only use it on a network you trust. *Off* turns it off.
+
+**Start RetroTV with ReplayOS** (a cable box that comes on with the TV): ReplayOS
+launches whatever an autostart file names. On the Pi, as root (replace `nfs` with
+your storage: `usb`, `nvme` or `sd`):
+
+```bash
+mkdir -p /media/nfs/roms/avtest && : > /media/nfs/roms/avtest/retrotv.lr
+echo /roms/avtest/retrotv.lr > /media/nfs/roms/_autostart/audio_video_test.lr
+```
+
+Delete `roms/_autostart/audio_video_test.lr` to stop it. The path in the file is relative
+to your storage and starts with `/`. The `avtest` folder name is what tells
+ReplayOS to use RetroTV.
 
 ## Servers
 
