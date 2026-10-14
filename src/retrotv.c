@@ -28,8 +28,9 @@
 #include "osd.h"
 #include "player.h"
 #include "remote.h"
+#include "webui.h"
 
-#define RETROTV_VERSION "0.2.1"
+#define RETROTV_VERSION "0.2.2"
 /* Output refresh: 60 Hz, or 50 Hz while a 25/50 fps (PAL) channel plays so
  * every frame is held equally long. Audio frames per run follow the rate. */
 #define AFRAMES_MAX ((size_t)(PLAYER_RATE / 50))   /* 960 stereo frames per run at 50 Hz */
@@ -970,56 +971,102 @@ static double sleep_level(void)
 
 static const char REMOTE_HELP[] =
   "RetroTV remote control\n"
+  "  /                     remote control page (open it in a phone's browser)\n"
   "  /tune?ch=36           tune channel 36 (its number in the playlist)\n"
   "  /tune?name=star+trek  tune by name (first match)\n"
   "  /up  /down  /last     channel up, down, previous\n"
-  "  /status               what's on (JSON)\n";
+  "  /status               what's on (JSON)\n"
+  "  /channels             every channel with Now/Next (JSON)\n";
+
+/* "now":{"title":..,"start":..,"stop":..},"next":{..} for one channel (guide_mu held) */
+static void remote_now_next(remote_buf *b, const m3u_channel *ch, time_t t)
+{
+  const epg_prog *pn, *px;
+  epg_now_next(guide_chan(guide, ch), t, &pn, &px);
+  const epg_prog *ps[2] = { pn, px };
+  for (int k = 0; k < 2; k++) {
+    remote_puts(b, k ? ",\"next\":" : ",\"now\":");
+    if (!ps[k]) { remote_puts(b, "null"); continue; }
+    remote_puts(b, "{\"title\":");
+    remote_json(b, ps[k]->title);
+    remote_printf(b, ",\"start\":%lld,\"stop\":%lld}", (long long)ps[k]->start, (long long)ps[k]->stop);
+  }
+}
 
 /* the server thread: answer from chans and the published state only */
-static int remote_answer(const remote_cmd *c, char *body, size_t n, void *ctx)
+static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
 {
   (void)ctx;
   static const char *const STATES[] = { "tuning", "playing", "no signal", "off", "test card", "no channels" };
   switch (c->kind) {
-  case RC_HELP: snprintf(body, n, "%s", REMOTE_HELP); return 200;
-  case RC_NONE: snprintf(body, n, "not found\n\n%s", REMOTE_HELP); return 404;
-  case RC_BAD: snprintf(body, n, "{\"ok\":false,\"error\":\"bad request: use GET /tune?ch=<number> or ?name=<text>\"}"); return 400;
+  case RC_PAGE: b->type = "text/html; charset=utf-8"; remote_puts(b, webui_page); return 200;
+  case RC_HELP: remote_puts(b, REMOTE_HELP); return 200;
+  case RC_NONE: remote_printf(b, "not found\n\n%s", REMOTE_HELP); return 404;
+  case RC_BAD: remote_puts(b, "{\"ok\":false,\"error\":\"bad request: use GET /tune?ch=<number> or ?name=<text>\"}"); return 400;
   default: break;
   }
-  if (!chans.count) { snprintf(body, n, "{\"ok\":false,\"error\":\"no channels loaded\"}"); return 503; }
+  if (!chans.count) { remote_puts(b, "{\"ok\":false,\"error\":\"no channels loaded\"}"); return 503; }
   int idx = atomic_load(&pub_cur);
-  if (c->kind == RC_TUNE) {
+  if (idx < 0 || (size_t)idx >= chans.count) idx = 0;
+  time_t t = time(NULL);
+  switch (c->kind) {
+  case RC_CHANNELS:                                  /* no stream URLs: they can carry tokens */
+    remote_puts(b, "{\"ok\":true,\"current\":");
+    remote_json(b, chans.ch[idx].number);
+    remote_printf(b, ",\"time\":%lld,\"channels\":[", (long long)t);
+    pthread_mutex_lock(&guide_mu);
+    for (size_t i = 0; i < chans.count; i++) {
+      const m3u_channel *ch = &chans.ch[i];
+      remote_puts(b, i ? ",{\"ch\":" : "{\"ch\":");
+      remote_json(b, ch->number);
+      remote_puts(b, ",\"name\":");
+      remote_json(b, ch->name);
+      remote_puts(b, ",\"group\":");
+      remote_json(b, ch->group);
+      remote_now_next(b, ch, t);
+      remote_puts(b, "}");
+    }
+    pthread_mutex_unlock(&guide_mu);
+    remote_puts(b, "]}");
+    return 200;
+  case RC_TUNE:
     idx = remote_find(&chans, c->ch, c->name);
     if (idx < 0) {
-      char w[140];
-      remote_json_str(w, sizeof(w), *c->ch ? c->ch : c->name);
-      snprintf(body, n, "{\"ok\":false,\"error\":\"no such channel\",\"asked\":%s}", w);
+      remote_puts(b, "{\"ok\":false,\"error\":\"no such channel\",\"asked\":");
+      remote_json(b, *c->ch ? c->ch : c->name);
+      remote_puts(b, "}");
       return 404;
     }
     atomic_store(&remote_req, RQ_TUNE | idx << 3);
-  } else if (c->kind == RC_UP || c->kind == RC_DOWN || c->kind == RC_LAST) {
+    remote_puts(b, "{\"ok\":true,\"ch\":");
+    remote_json(b, chans.ch[idx].number);
+    remote_puts(b, ",\"name\":");
+    remote_json(b, chans.ch[idx].name);
+    remote_puts(b, "}");
+    return 200;
+  case RC_UP: case RC_DOWN: case RC_LAST:
     atomic_store(&remote_req, c->kind == RC_UP ? RQ_UP : c->kind == RC_DOWN ? RQ_DOWN : RQ_LAST);
-    idx = -1;                                        /* known once applied: see /status */
-  }
-  if (c->kind != RC_STATUS && idx < 0) { snprintf(body, n, "{\"ok\":true}"); return 200; }
-  if (idx < 0 || (size_t)idx >= chans.count) idx = 0;
-  const m3u_channel *ch = &chans.ch[idx];
-  char num[48], name[200], now[200] = "null";
-  remote_json_str(num, sizeof(num), ch->number);
-  remote_json_str(name, sizeof(name), ch->name);
-  if (c->kind == RC_STATUS) {
-    pthread_mutex_lock(&guide_mu);
+    remote_puts(b, "{\"ok\":true}");                 /* the channel is known once applied: see /status */
+    return 200;
+  default: {                                         /* RC_STATUS */
+    const m3u_channel *ch = &chans.ch[idx];
     const epg_prog *pn, *px;
-    epg_now_next(guide_chan(guide, ch), time(NULL), &pn, &px);
-    if (pn) remote_json_str(now, sizeof(now), pn->title);
-    pthread_mutex_unlock(&guide_mu);
     int st = atomic_load(&pub_state);
-    snprintf(body, n, "{\"ok\":true,\"ch\":%s,\"name\":%s,\"state\":\"%s\",\"now\":%s,\"channels\":%zu}",
-             num, name, STATES[st >= 0 && st <= PS_NO_CHANNELS ? st : 0], now, chans.count);
-  } else {
-    snprintf(body, n, "{\"ok\":true,\"ch\":%s,\"name\":%s}", num, name);
+    remote_puts(b, "{\"ok\":true,\"ch\":");
+    remote_json(b, ch->number);
+    remote_puts(b, ",\"name\":");
+    remote_json(b, ch->name);
+    remote_printf(b, ",\"state\":\"%s\",\"now\":", STATES[st >= 0 && st <= PS_NO_CHANNELS ? st : 0]);
+    pthread_mutex_lock(&guide_mu);
+    epg_now_next(guide_chan(guide, ch), t, &pn, &px);
+    remote_json(b, pn ? pn->title : NULL);
+    remote_puts(b, ",\"next\":");
+    remote_json(b, px ? px->title : NULL);
+    pthread_mutex_unlock(&guide_mu);
+    remote_printf(b, ",\"channels\":%zu}", chans.count);
+    return 200;
   }
-  return 200;
+  }
 }
 
 /* start, stop or move the server to match the option (from retro_run / load) */
@@ -1029,14 +1076,16 @@ static void remote_update(void)
   remote_stop();
   remote_mode = 0;
   if (!opts.remote) { logf_(RETRO_LOG_INFO, "remote control off"); return; }
-  int e = remote_start(opts.remote == 2, REMOTE_PORT, remote_answer, NULL);
+  const char *pe = getenv("RETROTV_REMOTE_PORT");   /* tests: run beside an installed RetroTV */
+  int port = pe && atoi(pe) > 0 ? atoi(pe) : REMOTE_PORT;
+  int e = remote_start(opts.remote == 2, port, remote_answer, NULL);
   if (e) {
-    logf_(RETRO_LOG_WARN, "remote control: port %d: %s", REMOTE_PORT, strerror(e));
+    logf_(RETRO_LOG_WARN, "remote control: port %d: %s", port, strerror(e));
     remote_mode = opts.remote;                       /* don't retry every frame */
     return;
   }
   remote_mode = opts.remote;
-  logf_(RETRO_LOG_INFO, "remote control on %s:%d", opts.remote == 2 ? "all interfaces" : "127.0.0.1", REMOTE_PORT);
+  logf_(RETRO_LOG_INFO, "remote control on %s:%d", opts.remote == 2 ? "all interfaces" : "127.0.0.1", port);
 }
 
 /* a request from the server thread: like a press on the remote */

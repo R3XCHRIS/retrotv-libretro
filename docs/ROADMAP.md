@@ -143,6 +143,7 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] Start with ReplayOS: an `_autostart` file naming `/roms/avtest/retrotv.lr` (verified on 2.0.60)
 - [x] Remote control: HTTP on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/status`), local-only by default;
       Zaparoo tags via `**http.get:`; buttons from players 1-4 (Zaparoo's virtual pad is player 2)
+- [x] Phone remote page at `/` (served by the core, no install) and `/channels` with Now/Next
 - [ ] Ask the ReplayOS author for an official user-core hook
 - [ ] Check what a ReplayOS update does to the install (expect: re-run the installer)
 - [ ] Optional: hardware HEVC decode via V4L2 stateless (the Pi 5 only has HEVC hardware decode)

@@ -166,14 +166,27 @@ by default because TV broadcasts look best at 480 lines.
 
 ## Remote control
 
-While RetroTV is playing, it answers simple web requests on port **7474**:
+While RetroTV is playing, it answers simple web requests on port **7474**.
+
+**On your phone:** set **System Settings → Remote control → Home network**, then
+open `http://<your-pi>:7474/` in the browser (add it to your home screen for one
+tap). You get the channel on now, CH up/down and LAST buttons, and every channel
+with what's on now and next. Tap a channel to watch it, or search by channel or
+programme.
+
+<p align="center">
+  <img src="docs/screenshots/web-remote.png" width="300" alt="Remote control page on a phone">
+</p>
 
 | Request | Does |
 |---|---|
+| `/` | the remote control page |
 | `/tune?ch=36` | tune channel 36 (the number shown on the banner) |
 | `/tune?name=star+trek` | tune by name: exact first, else the first name that contains it |
 | `/up`, `/down`, `/last` | channel up, down, previous |
-| `/status` | what's on, as JSON: channel, name, state, programme |
+| `/status` | what's on, as JSON: channel, name, state, programme now and next |
+| `/channels` | every channel (number, name, group) with Now/Next and their times, as JSON |
+| `/help` | this list, as text |
 
 ```bash
 curl http://127.0.0.1:7474/tune?ch=36
