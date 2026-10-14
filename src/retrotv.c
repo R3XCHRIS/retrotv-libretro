@@ -1,15 +1,22 @@
 /* retrotv.c - RetroTV libretro core: flip through IPTV channels from an M3U
  * like a cable box. Prototype for ReplayOS (Raspberry Pi 5). */
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #include "libretro.h"
 #include "ffapi.h"
+#include "epg.h"
+#include "guide.h"
+#include "lastch.h"
 #include "loud.h"
 #include "m3u.h"
 #include "osd.h"
@@ -45,10 +52,33 @@ static int zoom;                   /* TV aspect button: 0 FIT, 1 ZOOM */
 static uint64_t audio_sent, audio_taken;   /* frames offered to / accepted by the frontend */
 static int audio_logged;
 static loud_state loud;            /* AGC on programme audio */
+static char store_dir[512];        /* <storage>/retrotv when playlist.txt was found there */
+static char last_path[1100];       /* where the last channel is remembered */
+static int saved_idx = -1;         /* channel index the file currently holds */
+static double played_at;           /* t_now() when the current channel started playing */
+static atomic_int saving;          /* a background write is running */
+static atomic_int save_errno;      /* last failed write (logged by retro_run), 0 = ok */
+#define REMEMBER_AFTER 5.0         /* seconds of watching before a channel counts as "last" */
+
+/* Programme guide: fetched and parsed on its own thread, swapped in under guide_mu. */
+static pthread_mutex_t guide_mu = PTHREAD_MUTEX_INITIALIZER;
+static epg *guide;                 /* NULL until the first fetch succeeds */
+static pthread_t guide_thread;
+static int guide_thread_live;
+static atomic_int guide_stop;
+static char guide_url[1024];
+#define GUIDE_BACK (2 * 3600)          /* keep programmes from 2 h ago ... */
+#define GUIDE_AHEAD (26 * 3600)        /* ... to 26 h ahead */
+#define GUIDE_REFRESH (2 * 3600)       /* refetch every 2 h */
+#define GUIDE_RETRY 60                 /* after a failed fetch */
+static char guide_msg[160];            /* written by the guide thread, logged by retro_run */
+static atomic_int guide_msg_ready;     /* (the frontend's log callback may not be thread-safe) */
 static char toast[16];             /* big green TV-style message, e.g. "ZOOM" */
 static double toast_until;
 static uint32_t noise_seed = 12345;
 static int list_open;
+static int guide_open;              /* TV guide screen (Start) */
+static guide_view gv;
 static size_t list_cursor;
 static uint16_t pad_prev;
 static int logged_playing, logged_error, logged_attempt;
@@ -118,6 +148,13 @@ static void clip_copy(char *dst, size_t n, const char *src, size_t maxchars)
 
 /* ---------- drawing ---------- */
 
+static void hhmm(time_t t, char *out, size_t n)
+{
+  struct tm tmv;
+  localtime_r(&t, &tmv);
+  strftime(out, n, "%H:%M", &tmv);
+}
+
 static void draw_banner(osd_surface *s, player_state st)
 {
   const m3u_channel *c = &chans.ch[cur];
@@ -129,6 +166,33 @@ static void draw_banner(osd_surface *s, player_state st)
   clip_copy(num, sizeof(num), c->number, 6);
   clip_copy(name, sizeof(name), c->name, 26);
   clip_copy(group, sizeof(group), c->group ? c->group : "", 40);
+
+  /* Now / Next from the guide, if it has this channel */
+  const char *gid = c->tvg_id && *c->tvg_id ? c->tvg_id : c->number;
+  char now_t[48] = "", next_t[48] = "", t0[8] = "", t1[8] = "", t2[8] = "";
+  double frac = -1;
+  pthread_mutex_lock(&guide_mu);
+  const epg_prog *pn, *px;
+  time_t tnow = time(NULL);
+  epg_now_next(epg_find(guide, gid), tnow, &pn, &px);
+  if (pn) {
+    epg_ascii(pn->title, now_t, sizeof(now_t));
+    hhmm(pn->start, t0, sizeof(t0));
+    hhmm(pn->stop, t1, sizeof(t1));
+    frac = (double)(tnow - pn->start) / (double)(pn->stop - pn->start);
+  }
+  if (px) {
+    epg_ascii(px->title, next_t, sizeof(next_t));
+    hhmm(px->start, t2, sizeof(t2));
+  }
+  pthread_mutex_unlock(&guide_mu);
+  int has_guide = pn || px;
+  if (has_guide) {                                   /* taller banner, same bottom edge */
+    bh = 160;
+    by = PLAYER_H - 28 - bh;
+    osd_fill(s, bx, by, bw, bh, OSD_RGB(8, 16, 72), 255);
+    osd_fill(s, bx, by, bw, 3, OSD_RGB(240, 200, 40), 255);
+  }
 
   osd_text_shadow(s, bx + 14, by + 16, num, 4, OSD_RGB(255, 214, 64));
   int nx = bx + 14 + osd_text_width(num, 4) + 18;
@@ -167,10 +231,34 @@ static void draw_banner(osd_surface *s, player_state st)
   default:
     line[0] = '\0';
   }
-  int maxc = (bx + bw - 14 - nx) / 8;                 /* keep inside the banner */
+  int right = bx + bw - 14, y = by + 60;
+  if (has_guide) {
+    int lx = nx + 48, chars = (right - lx) / 16;      /* titles at 2x: 16 px per character */
+    if (pn) {
+      osd_text(s, nx, y + 4, "NOW", 1, OSD_RGB(240, 200, 40));
+      epg_shorten(now_t, chars);
+      osd_text_shadow(s, lx, y, now_t, 2, OSD_RGB(255, 255, 255));
+      int bx0 = lx + 48, bw0 = right - 48 - bx0;      /* "19:40 [=====-----] 20:10" */
+      osd_text(s, lx, y + 22, t0, 1, OSD_RGB(200, 200, 200));
+      osd_fill(s, bx0, y + 22, bw0, 8, OSD_RGB(40, 60, 130), 255);
+      if (frac > 0) osd_fill(s, bx0, y + 22, (int)(bw0 * (frac > 1 ? 1 : frac)), 8, OSD_RGB(240, 200, 40), 255);
+      osd_text(s, right - 40, y + 22, t1, 1, OSD_RGB(200, 200, 200));
+    }
+    if (px) {
+      osd_text(s, nx, y + 42, "NEXT", 1, OSD_RGB(240, 200, 40));
+      char nl[64];
+      epg_shorten(next_t, (right - lx) / 8 - 7);            /* "20:40  " in front */
+      snprintf(nl, sizeof(nl), "%s  %s", t2, next_t);
+      osd_text(s, lx, y + 42, nl, 1, OSD_RGB(160, 200, 255));
+    }
+    y += 62;
+  } else {
+    y += 6;
+  }
+  int maxc = (right - nx) / 8;                       /* keep inside the banner */
   if (maxc > 0 && (int)strlen(line) > maxc) line[maxc] = '\0';
-  osd_text(s, nx, by + 66, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
-  osd_text(s, nx, by + 82, "UP/DN CH  A INFO  B LAST  Y ZOOM  SELECT LIST", 1, OSD_RGB(130, 130, 160));
+  osd_text(s, nx, y, line, 1, st == PLAYER_ERROR ? OSD_RGB(255, 120, 120) : OSD_RGB(200, 200, 200));
+  osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  SEL LIST  START GUIDE", 1, OSD_RGB(130, 130, 160));
 }
 
 static void draw_list(osd_surface *s)
@@ -238,13 +326,13 @@ static char *slurp(const char *path, size_t max)
   return buf;
 }
 
-static char *fetch_url(const char *url, size_t max, char *err, size_t errlen)
+static char *fetch_url(const char *url, size_t max, const AVIOInterruptCB *icb, char *err, size_t errlen)
 {
   AVIOContext *io = NULL;
   AVDictionary *o = NULL;
   p_av_dict_set(&o, "rw_timeout", "10000000", 0);
   p_av_dict_set(&o, "user_agent", "RetroTV/" RETROTV_VERSION " (libretro)", 0);
-  int rc = p_avio_open2(&io, url, AVIO_FLAG_READ, NULL, &o);
+  int rc = p_avio_open2(&io, url, AVIO_FLAG_READ, icb, &o);
   p_av_dict_free(&o);
   if (rc < 0) { char e[96]; p_av_strerror(rc, e, sizeof(e)); snprintf(err, errlen, "fetch failed: %s", e); return NULL; }
   char *buf = malloc(max + 1);
@@ -309,6 +397,7 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
     snprintf(buf, sizeof(buf), "%s/retrotv/playlist.txt", roots[i]);
     char *t = slurp(buf, 4096), *l = t ? first_line(t) : NULL;
     if (l) {
+      snprintf(store_dir, sizeof(store_dir), "%s/retrotv", roots[i]);
       if (m3u_is_url(l) || l[0] == '/') snprintf(out, n, "%s", l);
       else snprintf(out, n, "%s/retrotv/%s", roots[i], l);
       free(t);
@@ -317,7 +406,12 @@ static int resolve_playlist(const char *game_path, char *out, size_t n)
     free(t);
     snprintf(buf, sizeof(buf), "%s/retrotv/channels.m3u", roots[i]);
     FILE *f = fopen(buf, "rb");
-    if (f) { fclose(f); snprintf(out, n, "%s", buf); return 0; }
+    if (f) {
+      fclose(f);
+      snprintf(store_dir, sizeof(store_dir), "%s/retrotv", roots[i]);
+      snprintf(out, n, "%s", buf);
+      return 0;
+    }
   }
   return -1;
 }
@@ -326,7 +420,7 @@ static int load_playlist(const char *src)
 {
   if (m3u_is_url(src)) {
     char err[128] = "";
-    char *text = fetch_url(src, 8u << 20, err, sizeof(err));
+    char *text = fetch_url(src, 8u << 20, NULL, err, sizeof(err));
     if (!text) { snprintf(help_reason, sizeof(help_reason), "%s", err); return -1; }
     int rc = m3u_parse(text, NULL, &chans);
     free(text);
@@ -334,6 +428,153 @@ static int load_playlist(const char *src)
   }
   if (m3u_load(src, &chans)) { snprintf(help_reason, sizeof(help_reason), "cannot read %s", src); return -1; }
   return 0;
+}
+
+/* ---------- programme guide ---------- */
+
+static void guide_note(const char *fmt, ...)
+{
+  if (atomic_load(&guide_msg_ready)) return;       /* previous one not logged yet: drop */
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(guide_msg, sizeof(guide_msg), fmt, ap);
+  va_end(ap);
+  atomic_store(&guide_msg_ready, 1);
+}
+
+static int guide_interrupt(void *opaque) { (void)opaque; return atomic_load(&guide_stop); }
+
+/* sleep up to secs, waking early when asked to stop */
+static void guide_sleep(int secs)
+{
+  for (int i = 0; i < secs * 10 && !atomic_load(&guide_stop); i++) {
+    struct timespec ts = { 0, 100 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
+}
+
+static void *guide_main(void *arg)
+{
+  (void)arg;
+  const AVIOInterruptCB icb = { guide_interrupt, NULL };
+  while (!atomic_load(&guide_stop)) {
+    char err[128] = "";
+    char *xml = fetch_url(guide_url, 32u << 20, &icb, err, sizeof(err));
+    epg *g = NULL;
+    if (xml) {
+      time_t now = time(NULL);
+      g = epg_parse(xml, now - GUIDE_BACK, now + GUIDE_AHEAD);
+      free(xml);
+    }
+    if (atomic_load(&guide_stop)) { epg_free(g); break; }
+    if (!g) {
+      guide_note("guide fetch failed (%s); retrying in %d s", *err ? err : "parse error", GUIDE_RETRY);
+      guide_sleep(GUIDE_RETRY);
+      continue;
+    }
+    guide_note("guide: %zu programmes on %zu channels", g->nprog, g->nch);
+    pthread_mutex_lock(&guide_mu);
+    epg *old = guide;
+    guide = g;
+    pthread_mutex_unlock(&guide_mu);
+    epg_free(old);
+    guide_sleep(GUIDE_REFRESH);
+  }
+  return NULL;
+}
+
+static void guide_start(const char *url)
+{
+  if (!url || !*url || guide_thread_live) return;
+  snprintf(guide_url, sizeof(guide_url), "%s", url);
+  atomic_store(&guide_stop, 0);
+  guide_thread_live = !pthread_create(&guide_thread, NULL, guide_main, NULL);
+}
+
+static void guide_shutdown(void)
+{
+  if (guide_thread_live) {
+    atomic_store(&guide_stop, 1);                   /* aborts a fetch in progress too */
+    pthread_join(guide_thread, NULL);
+    guide_thread_live = 0;
+  }
+  pthread_mutex_lock(&guide_mu);
+  epg_free(guide);
+  guide = NULL;
+  pthread_mutex_unlock(&guide_mu);
+}
+
+/* ---------- last channel ---------- */
+
+/* <save dir>/retrotv-last-<hash>.txt; the frontend's save directory if it has
+ * one, else <storage>/retrotv (survives ReplayOS updates), else /tmp. */
+static void last_init(const char *src)
+{
+  const char *dir = NULL;
+  if (!env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || !dir || !*dir) dir = NULL;
+  if (!dir) dir = *store_dir ? store_dir : "/tmp";
+  snprintf(last_path, sizeof(last_path), "%s/retrotv-last-%08x.txt", dir, (unsigned)lastch_hash(src));
+  logf_(RETRO_LOG_INFO, "last channel file: %s", last_path);
+}
+
+/* mkdir -p for the directory part of path (frontends may hand us a save
+ * directory that doesn't exist yet: ReplayOS does for the avtest slot) */
+static void make_parent_dirs(const char *path)
+{
+  char d[1100];
+  snprintf(d, sizeof(d), "%s", path);
+  char *slash = strrchr(d, '/');
+  if (!slash || slash == d) return;
+  *slash = '\0';
+  for (char *p = d + 1; *p; p++) {
+    if (*p != '/') continue;
+    *p = '\0';
+    mkdir(d, 0755);
+    *p = '/';
+  }
+  mkdir(d, 0755);
+}
+
+static int write_file(const char *path, const char *text)
+{
+  make_parent_dirs(path);
+  char tmp[1200];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  FILE *f = fopen(tmp, "wb");
+  if (!f) return -1;
+  int ok = fputs(text, f) >= 0;
+  ok = (fclose(f) == 0) && ok;
+  return ok ? rename(tmp, path) : (remove(tmp), -1);
+}
+
+typedef struct { char path[1100]; char text[400]; } save_job;
+
+static void *save_main(void *arg)
+{
+  save_job *j = arg;
+  if (write_file(j->path, j->text)) atomic_store(&save_errno, errno ? errno : EIO);
+  free(j);
+  atomic_store(&saving, 0);
+  return NULL;
+}
+
+/* Storage may be NFS: write on a detached thread so retro_run never waits. */
+static void last_save_async(size_t idx)
+{
+  if (!*last_path || atomic_exchange(&saving, 1)) return;     /* one at a time; retry next frame */
+  save_job *j = malloc(sizeof(*j));
+  pthread_t t;
+  pthread_attr_t a;
+  int ok = 0;
+  if (j && !pthread_attr_init(&a)) {
+    snprintf(j->path, sizeof(j->path), "%s", last_path);
+    lastch_format(&chans.ch[idx], j->text, sizeof(j->text));
+    pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    ok = !pthread_create(&t, &a, save_main, j);
+    pthread_attr_destroy(&a);
+  }
+  if (!ok) { free(j); atomic_store(&saving, 0); return; }
+  saved_idx = (int)idx;
 }
 
 /* ---------- audio ---------- */
@@ -398,6 +639,7 @@ static uint16_t read_pad(void)
     RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_A,
     RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L,
     RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_X,
+    RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
     RETRO_DEVICE_ID_JOYPAD_Y,
   };
   for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
@@ -419,6 +661,17 @@ static void handle_input(void)
 #define PAD_Y X
 #define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
   if (!chans.count) return;
+  if (guide_open) {
+    time_t now = time(NULL), first = guide_slot(now) - GUIDE_STEP, last = now + 24 * 3600;
+    if (PRESSED(UP))    gv.sel = gv.sel ? gv.sel - 1 : chans.count - 1;
+    if (PRESSED(DOWN))  gv.sel = (gv.sel + 1) % chans.count;
+    if (PRESSED(LEFT) && gv.t0 - GUIDE_STEP >= first) gv.t0 -= GUIDE_STEP;
+    if (PRESSED(RIGHT) && gv.t0 + GUIDE_STEP <= last) gv.t0 += GUIDE_STEP;
+    guide_scroll(&gv, chans.count);
+    if (FACE(PAD_A)) { guide_open = 0; if (gv.sel != cur) tune(gv.sel); }
+    if (FACE(PAD_B) || PRESSED(START)) guide_open = 0;
+    return;
+  }
   if (list_open) {
     if (PRESSED(UP))   list_cursor = list_cursor ? list_cursor - 1 : chans.count - 1;
     if (PRESSED(DOWN)) list_cursor = (list_cursor + 1) % chans.count;
@@ -431,6 +684,13 @@ static void handle_input(void)
   if (FACE(PAD_B))     tune(prev);
   if (FACE(PAD_A))     banner_until = t_now() + BANNER_SECONDS;
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
+  if (PRESSED(START)) {
+    guide_open = 1;
+    gv.sel = cur;
+    gv.t0 = guide_slot(time(NULL));
+    gv.top = cur > 2 ? cur - 2 : 0;                  /* a little context above */
+    guide_scroll(&gv, chans.count);
+  }
   if (FACE(PAD_Y)) {
     zoom = !zoom;
     player_set_zoom(pl, zoom);
@@ -513,7 +773,14 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   cur = prev = 0;
   if (chans.count) {
     logf_(RETRO_LOG_INFO, "%zu channels loaded from %s", chans.count, src);
-    tune(0);
+    last_init(src);
+    guide_start(chans.epg_url);
+    char *t = slurp(last_path, 4096);
+    int idx = lastch_find(&chans, t);
+    free(t);
+    if (idx >= 0) logf_(RETRO_LOG_INFO, "resuming ch %s (last watched)", chans.ch[idx].number);
+    saved_idx = idx;
+    tune(idx >= 0 ? (size_t)idx : 0);
   } else {
     logf_(RETRO_LOG_WARN, "no channels: %s", help_reason);
   }
@@ -525,8 +792,15 @@ RETRO_API bool retro_load_game_special(unsigned t, const struct retro_game_info 
 RETRO_API void retro_unload_game(void)
 {
   log_stats();
+  guide_shutdown();
   if (pl) { player_destroy(pl); pl = NULL; }
+  for (int i = 0; i < 200 && atomic_load(&saving); i++) {      /* let a pending write finish (max 2 s) */
+    struct timespec ts = { 0, 10 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
   m3u_free(&chans);
+  last_path[0] = store_dir[0] = '\0';
+  saved_idx = -1;
 }
 
 RETRO_API void retro_run(void)
@@ -565,9 +839,19 @@ RETRO_API void retro_run(void)
     logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs (%dx%d %s %.2ffps %s%s)", chans.ch[cur].number,
           player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
     logged_playing = 1;
+    played_at = t_now();
     banner_until = t_now() + BANNER_SECONDS;     /* show what came on */
     follow_refresh(in.fps);
   }
+
+  int se = atomic_exchange(&save_errno, 0);
+  if (se) logf_(RETRO_LOG_WARN, "could not save last channel to %s: %s", last_path, strerror(se));
+  if (atomic_load(&guide_msg_ready)) {
+    logf_(RETRO_LOG_INFO, "%s", guide_msg);
+    atomic_store(&guide_msg_ready, 0);
+  }
+  if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
+    last_save_async(cur);
 
   osd_surface s = { fb, PLAYER_W, PLAYER_H, PLAYER_W };
   int have = player_video(pl, fb);
@@ -584,7 +868,11 @@ RETRO_API void retro_run(void)
   }
 
   int show_banner = st != PLAYER_PLAYING || t_now() < banner_until;
-  if (list_open) draw_list(&s);
+  if (guide_open) {
+    pthread_mutex_lock(&guide_mu);
+    guide_draw(&s, &chans, guide, &gv, cur, time(NULL));
+    pthread_mutex_unlock(&guide_mu);
+  } else if (list_open) draw_list(&s);
   else if (show_banner) draw_banner(&s, st);
 
   if (t_now() < toast_until) draw_toast(&s);

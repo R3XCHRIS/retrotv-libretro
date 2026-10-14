@@ -20,8 +20,8 @@ grid, static between channels, and a blue NO SIGNAL screen.
 | Channel list | ✅ in M0 | 12 rows, current channel in yellow |
 | Tuning static | ✅ in M0 | grey noise with banding, quiet hiss |
 | NO SIGNAL | ✅ in M0 | classic blue screen |
-| TV guide grid | mockup | needs XMLTV from the playlist's `x-tvg-url` (M1) |
-| Now / Next banner with progress | mockup | needs EPG (M1) |
+| TV guide grid | ✅ in M1 | Start; live preview top-left, info pane, 7 rows x 90 min |
+| Now / Next banner with progress | ✅ in M1 | banner grows when the channel has guide data |
 | Options menu | mockup | maps to libretro core options (M2) |
 
 Mockups (private Claude design canvas, ask the maintainer for access):

@@ -22,7 +22,11 @@
 typedef struct { uint32_t *px; double pts; } vslot;
 typedef struct { uint64_t pos; double pts; } anchor;
 
-struct player {
+/* One tune: its own decode thread and buffers. The player swaps streams on a
+ * channel change and lets a reaper thread close the old one (see below). */
+typedef struct stream stream;
+
+struct stream {
   pthread_t thread;
   int thread_live;
   atomic_int abort;
@@ -44,7 +48,7 @@ struct player {
   /* video queue (ring) */
   vslot vq[VQ];
   int vhead, vcount;
-  atomic_int zoom;              /* 1 = crop to fill 4:3 (TV aspect button) */
+  atomic_int *zoom;             /* the player's aspect button: 1 = crop to fill 4:3 */
   aspect_tracker bars;          /* decode thread only */
   long vframes;                 /* decode thread only */
   uint32_t *shown;              /* last picture handed out */
@@ -68,7 +72,7 @@ static double now_mono(void)
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-static void set_error(player *p, const char *what, int code)
+static void set_error(stream *p, const char *what, int code)
 {
   char buf[96] = "";
   if (code) p_av_strerror(code, buf, sizeof(buf));
@@ -78,11 +82,11 @@ static void set_error(player *p, const char *what, int code)
   atomic_store(&p->state, PLAYER_ERROR);
 }
 
-static int interrupt_cb(void *opaque) { return atomic_load(&((player *)opaque)->abort); }
+static int interrupt_cb(void *opaque) { return atomic_load(&((stream *)opaque)->abort); }
 
 /* ---------- producer side (thread) ---------- */
 
-static int wait_space(player *p, int need_video, size_t need_audio)
+static int wait_space(stream *p, int need_video, size_t need_audio)
 {
   pthread_mutex_lock(&p->mu);
   while (!atomic_load(&p->abort)) {
@@ -123,7 +127,7 @@ static int luma8(const AVFrame *f)
 }
 
 /* Look for letterbox/pillarbox bars on every 3rd frame (cheap: sparse rows/columns). */
-static void track_bars(player *p, const AVFrame *f)
+static void track_bars(stream *p, const AVFrame *f)
 {
   int t, l;
   if (p->vframes++ % 3 || !luma8(f)) return;
@@ -136,7 +140,7 @@ static void track_bars(player *p, const AVFrame *f)
 }
 
 /* ZOOM: crop the frame to the 4:3 centre of the picture inside the bars. */
-static void zoom_crop(player *p, AVFrame *f, AVRational sar)
+static void zoom_crop(stream *p, AVFrame *f, AVRational sar)
 {
   int x, y, cw, ch;
   double s = (sar.num > 0 && sar.den > 0) ? (double)sar.num / sar.den : 1.0;
@@ -149,7 +153,7 @@ static void zoom_crop(player *p, AVFrame *f, AVRational sar)
   p_av_frame_apply_cropping(f, AV_FRAME_CROP_UNALIGNED);
 }
 
-static void push_audio(player *p, const int16_t *s, int n, double pts)
+static void push_audio(stream *p, const int16_t *s, int n, double pts)
 {
   pthread_mutex_lock(&p->mu);
   uint64_t pos = p->awrite;
@@ -175,7 +179,7 @@ static void push_audio(player *p, const int16_t *s, int n, double pts)
 
 static void *thread_main(void *arg)
 {
-  player *p = arg;
+  stream *p = arg;
 #ifdef __linux__
   pthread_setname_np(pthread_self(), "retrotv-dec");   /* visible in top -H / ps -L */
 #endif
@@ -288,7 +292,7 @@ static void *thread_main(void *arg)
         int ox, oy, ow, oh;
         AVRational sar = fr->sample_aspect_ratio.num ? fr->sample_aspect_ratio : st->sample_aspect_ratio;
         track_bars(p, fr);
-        if (atomic_load(&p->zoom)) zoom_crop(p, fr, sar);
+        if (atomic_load(p->zoom)) zoom_crop(p, fr, sar);
         fit_rect(fr, sar, &ox, &oy, &ow, &oh);
         /* Fast path for streams pre-scaled on the server (Dispatcharr output
          * profile): same size in and out, so swscale takes its unscaled
@@ -358,9 +362,12 @@ done:
 
 /* ---------- consumer side (libretro thread) ---------- */
 
-player *player_create(void)
+static void stream_close(stream *p);
+static void stream_free(stream *p);
+
+static stream *stream_create(atomic_int *zoom)
 {
-  player *p = calloc(1, sizeof(*p));
+  stream *p = calloc(1, sizeof(*p));
   if (!p) return NULL;
   pthread_mutex_init(&p->mu, NULL);
   pthread_cond_init(&p->cv, NULL);
@@ -369,14 +376,15 @@ player *player_create(void)
   for (int i = 0; i < VQ; i++) p->vq[i].px = calloc((size_t)PLAYER_W * PLAYER_H, 4);
   int ok = p->aq && p->shown;
   for (int i = 0; i < VQ; i++) ok = ok && p->vq[i].px;
-  if (!ok) { player_destroy(p); return NULL; }
+  if (!ok) { stream_free(p); return NULL; }
+  p->zoom = zoom;
   return p;
 }
 
-void player_destroy(player *p)
+static void stream_free(stream *p)
 {
   if (!p) return;
-  player_close(p);
+  stream_close(p);
   for (int i = 0; i < VQ; i++) free(p->vq[i].px);
   free(p->aq);
   free(p->shown);
@@ -386,7 +394,7 @@ void player_destroy(player *p)
   free(p);
 }
 
-static void reset_buffers(player *p)
+static void reset_buffers(stream *p)
 {
   p->vhead = p->vcount = 0;
   p->awrite = p->aread = 0;
@@ -406,9 +414,8 @@ static void reset_buffers(player *p)
   p->vframes = 0;
 }
 
-int player_open(player *p, const char *url)
+static int stream_open(stream *p, const char *url)
 {
-  player_close(p);
   free(p->url);
   p->url = strdup(url);
   if (!p->url) return -1;
@@ -425,7 +432,7 @@ int player_open(player *p, const char *url)
   return 0;
 }
 
-void player_close(player *p)
+static void stream_close(stream *p)
 {
   if (!p->thread_live) { atomic_store(&p->state, PLAYER_IDLE); return; }
   atomic_store(&p->abort, 1);
@@ -437,20 +444,15 @@ void player_close(player *p)
   atomic_store(&p->state, PLAYER_IDLE);
 }
 
-player_state player_get_state(player *p) { return (player_state)atomic_load(&p->state); }
-const char *player_error(player *p) { return p->err; }
-double player_tuning_seconds(player *p) { return now_mono() - p->open_time; }
 
-void player_set_zoom(player *p, int zoom) { atomic_store(&p->zoom, zoom ? 1 : 0); }
-
-void player_get_stats(player *p, player_stats *st)
+static void stream_get_stats(stream *p, player_stats *st)
 {
   pthread_mutex_lock(&p->mu);
   *st = p->stats;
   pthread_mutex_unlock(&p->mu);
 }
 
-int player_attempt(player *p, char *why, size_t n)
+static int stream_attempt(stream *p, char *why, size_t n)
 {
   pthread_mutex_lock(&p->mu);
   if (why && n) snprintf(why, n, "%s", p->attempt_err);
@@ -458,14 +460,14 @@ int player_attempt(player *p, char *why, size_t n)
   return atomic_load(&p->attempt);
 }
 
-void player_get_info(player *p, player_info *info)
+static void stream_get_info(stream *p, player_info *info)
 {
   pthread_mutex_lock(&p->mu);
   *info = p->info;
   pthread_mutex_unlock(&p->mu);
 }
 
-static double pts_at(player *p, uint64_t pos)
+static double pts_at(stream *p, uint64_t pos)
 {
   /* latest anchor at or before pos */
   int lo = p->nanc > NANCHOR ? p->nanc - NANCHOR : 0;
@@ -476,7 +478,7 @@ static double pts_at(player *p, uint64_t pos)
   return NAN;
 }
 
-void player_audio(player *p, int16_t *out, size_t frames, double frame_seconds)
+static void stream_audio(stream *p, int16_t *out, size_t frames, double frame_seconds)
 {
   memset(out, 0, frames * 2 * sizeof(int16_t));
   int st = atomic_load(&p->state);
@@ -519,7 +521,7 @@ void player_audio(player *p, int16_t *out, size_t frames, double frame_seconds)
   pthread_mutex_unlock(&p->mu);
 }
 
-int player_video(player *p, uint32_t *dst)
+static int stream_video(stream *p, uint32_t *dst)
 {
   pthread_mutex_lock(&p->mu);
   int st = atomic_load(&p->state);
@@ -557,3 +559,128 @@ int player_video(player *p, uint32_t *dst)
   pthread_mutex_unlock(&p->mu);
   return have;
 }
+
+/* ---------- player: the current stream, old ones closed in the background ---------- */
+
+/* Closing a stream (joining its thread, freeing the demuxer and FFmpeg's
+ * decoder threads) took up to ~100 ms on the Pi. A channel change used to do
+ * that inside retro_run; now the old stream is told to stop and a detached
+ * reaper thread does the rest. player_destroy waits for the reapers, because
+ * the frontend may unload the core right after. */
+struct player {
+  stream *cur;
+  atomic_int zoom;
+  pthread_mutex_t rmu;
+  pthread_cond_t rcv;
+  int reaping;                  /* streams still being closed */
+};
+
+typedef struct { player *pl; stream *s; } reap_job;
+
+static void *reap_main(void *arg)
+{
+  reap_job *j = arg;
+  stream_free(j->s);
+  pthread_mutex_lock(&j->pl->rmu);
+  j->pl->reaping--;
+  pthread_cond_broadcast(&j->pl->rcv);
+  pthread_mutex_unlock(&j->pl->rmu);
+  free(j);
+  return NULL;
+}
+
+static void retire(player *pl, stream *s)
+{
+  if (!s) return;
+  atomic_store(&s->abort, 1);                       /* stop network and decoding now */
+  pthread_mutex_lock(&s->mu);
+  pthread_cond_broadcast(&s->cv);
+  pthread_mutex_unlock(&s->mu);
+  reap_job *j = malloc(sizeof(*j));
+  pthread_t t;
+  pthread_attr_t a;
+  int ok = 0;
+  if (j && !pthread_attr_init(&a)) {
+    pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    *j = (reap_job){ pl, s };
+    pthread_mutex_lock(&pl->rmu);
+    pl->reaping++;
+    pthread_mutex_unlock(&pl->rmu);
+    ok = !pthread_create(&t, &a, reap_main, j);
+    pthread_attr_destroy(&a);
+    if (!ok) {
+      pthread_mutex_lock(&pl->rmu);
+      pl->reaping--;
+      pthread_mutex_unlock(&pl->rmu);
+    }
+  }
+  if (!ok) { free(j); stream_free(s); }             /* fall back to closing here */
+}
+
+player *player_create(void)
+{
+  player *pl = calloc(1, sizeof(*pl));
+  if (!pl) return NULL;
+  pthread_mutex_init(&pl->rmu, NULL);
+  pthread_cond_init(&pl->rcv, NULL);
+  return pl;
+}
+
+void player_destroy(player *pl)
+{
+  if (!pl) return;
+  stream_free(pl->cur);
+  pl->cur = NULL;
+  pthread_mutex_lock(&pl->rmu);
+  while (pl->reaping > 0) pthread_cond_wait(&pl->rcv, &pl->rmu);
+  pthread_mutex_unlock(&pl->rmu);
+  pthread_cond_destroy(&pl->rcv);
+  pthread_mutex_destroy(&pl->rmu);
+  free(pl);
+}
+
+int player_open(player *pl, const char *url)
+{
+  retire(pl, pl->cur);
+  pl->cur = stream_create(&pl->zoom);
+  if (!pl->cur) return -1;
+  return stream_open(pl->cur, url);
+}
+
+void player_close(player *pl)
+{
+  retire(pl, pl->cur);
+  pl->cur = NULL;
+}
+
+player_state player_get_state(player *pl) { return pl->cur ? (player_state)atomic_load(&pl->cur->state) : PLAYER_IDLE; }
+const char *player_error(player *pl) { return pl->cur ? pl->cur->err : ""; }
+double player_tuning_seconds(player *pl) { return pl->cur ? now_mono() - pl->cur->open_time : 0.0; }
+void player_set_zoom(player *pl, int zoom) { atomic_store(&pl->zoom, zoom ? 1 : 0); }
+
+void player_get_stats(player *pl, player_stats *st)
+{
+  if (pl->cur) stream_get_stats(pl->cur, st);
+  else memset(st, 0, sizeof(*st));
+}
+
+int player_attempt(player *pl, char *why, size_t n)
+{
+  if (pl->cur) return stream_attempt(pl->cur, why, n);
+  if (why && n) why[0] = '\0';
+  return 0;
+}
+
+void player_get_info(player *pl, player_info *info)
+{
+  if (pl->cur) stream_get_info(pl->cur, info);
+  else memset(info, 0, sizeof(*info));
+}
+
+void player_audio(player *pl, int16_t *out, size_t frames, double frame_seconds)
+{
+  if (pl->cur) stream_audio(pl->cur, out, frames, frame_seconds);
+  else memset(out, 0, frames * 2 * sizeof(int16_t));
+}
+
+int player_video(player *pl, uint32_t *dst) { return pl->cur ? stream_video(pl->cur, dst) : 0; }

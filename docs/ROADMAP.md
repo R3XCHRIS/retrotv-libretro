@@ -81,14 +81,16 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] Optional: live stream stats (resolution, bitrate, failover) in the info banner
 
 ## M1 — Feels like cable
-- [ ] **TV guide** (Select long-press or Start): XMLTV from the playlist's `x-tvg-url`
-  (Dispatcharr `/output/epg/...`), a 90-minute grid, scrolling listings
-- [ ] **Now / Next** in the banner from the EPG, with a progress bar for the current show
-- [ ] **Number entry**: type a channel number with the D-pad ("12_" → tune after 1.5 s)
-- [ ] Tune timeout with "retrying", and automatically skip channels that keep failing (configurable)
-- [ ] **Favourites** (Start + A) and a favourites-only flip mode
-- [ ] Remember the last channel per playlist (saved in the core's save directory)
-- [ ] Channel logos in the banner (fetched and cached as PNG/JPEG, decoded with FFmpeg)
+- [x] **TV guide** (Start): XMLTV from the playlist's `x-tvg-url` (Dispatcharr `/output/epg/...`), a 90-minute
+  grid in 30-minute steps up to 24 h ahead, live preview window, info pane with description, red "now" line
+- [x] **Now / Next** in the banner from the EPG, with a progress bar for the current show (guide fetched
+  from `x-tvg-url` on a background thread, refreshed every 2 h; banner grows only when there is guide data)
+- [x] Remember the last channel per playlist (frontend save directory, else `<storage>/retrotv/`;
+  matched by number + name, so reordering the playlist doesn't lose it; written off the main thread)
+- [x] Old stream closed on a background thread (see Known issues)
+
+Not planned (owner's call, Oct 2026): number entry with the D-pad, favourites, channel logos in the
+banner, and automatically skipping channels that keep failing (the retry and NO SIGNAL behaviour stays).
 
 ## M2 — Options and QoL (libretro core options)
 - [x] Zoom button (pad Y): FIT letterboxes, ZOOM crops the picture inside detected bars to fill 4:3
@@ -106,7 +108,8 @@ Same 5 channels and 130 s button script for both runs (`scripts/pi-test.sh`, CPU
 - [ ] Preview tile in the guide (live picture of the highlighted channel)
 
 ## Known issues (from Pi testing)
-- [ ] Channel change blocks `retro_run` while the old stream closes (up to ~70 ms seen): close on a background thread
+- [x] Channel change blocked `retro_run` while the old stream closed (up to ~99 ms seen): now closed on a
+  background reaper thread; 20 channel changes in 10 s on the Pi kept `retro_run` at 6 ms or less
 - [ ] Tuning takes 4–7 s on cold Dispatcharr channels; a warm channel can start in under 1 s
 - [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
