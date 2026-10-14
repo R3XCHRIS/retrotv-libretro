@@ -73,5 +73,9 @@ cp "$TMP/retrotv_install.sh" "$TMP/retrotv_uninstall.sh" "$TMP/retrotv_update.sh
 say "core and scripts copied"
 
 bash "$EXTRA/retrotv_install.sh"
-say "next: put your playlist link in $STORAGE/retrotv/playlist.txt, then open Extra > audio_video_test"
+if grep -qvE '^[[:space:]]*(#|$)' "$STORAGE/retrotv/playlist.txt" 2>/dev/null; then
+  say "your playlist.txt is kept - open Extra > audio_video_test"
+else
+  say "next: put your playlist link in $STORAGE/retrotv/playlist.txt, then open Extra > audio_video_test"
+fi
 say "update later from Extra > retrotv_update.sh, remove with Extra > retrotv_uninstall.sh"
