@@ -92,7 +92,7 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
-enum { QM_SLEEP, QM_AUDIO, QM_ZOOM, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
 static int sleep_warned;             /* "SLEEP 1" shown */
@@ -368,7 +368,7 @@ static void draw_welcome(osd_surface *s)
   osd_text_shadow(s, x + 24, y + 18, "WELCOME TO RETROTV", 2, TH->title);
   static const char *rows[][2] = {
     { "UP / DOWN", "change channel" }, { "A", "what's on (banner)" }, { "B", "last channel" },
-    { "Y", "zoom / fit picture" }, { "X", "menu: sleep timer, audio, test card" }, { "START", "TV guide" },
+    { "Y", "zoom / fit picture" }, { "X", "menu: sleep, audio, leveller, test card" }, { "START", "TV guide" },
     { "SELECT", "channel list" },
   };
   for (int i = 0; i < 7; i++) {
@@ -823,6 +823,28 @@ static void step_audio(int dir)
   player_open_track(pl, chans.ch[cur].url, k);       /* re-tune with that track */
 }
 
+static const char *const LEVELLER_NAMES[3] = { "Off", "Normal", "Loud" };
+
+/* the volume leveller for now; System Settings holds the saved default */
+static void set_leveller(int v)
+{
+  opts.leveller = v;
+  loud.target_db = v == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
+  if (v) loud_reset(&loud);                          /* re-settle from unity, quickly */
+  char t[24];
+  snprintf(t, sizeof(t), "LEVELLER %s", v == 2 ? "LOUD" : v ? "NORMAL" : "OFF");
+  show_toast(t);
+  logf_(RETRO_LOG_INFO, "volume leveller %s (this session)", LEVELLER_NAMES[v]);
+}
+
+static void step_leveller(int dir)
+{
+  static const int order[3] = { 1, 2, 0 };            /* Normal -> Loud -> Off */
+  int i = 0;
+  while (i < 2 && order[i] != opts.leveller) i++;
+  set_leveller(order[(i + dir + 3) % 3]);
+}
+
 static void draw_qmenu(osd_surface *s)
 {
   int x = 40, y = 92, w = 330, rh = 34, h = 62 + QM_ROWS * rh;   /* below the OSD message */
@@ -845,6 +867,7 @@ static void draw_qmenu(osd_surface *s)
       if (in.naudio > 1) snprintf(val, sizeof(val), "%d/%d %s", in.audio_cur + 1, in.naudio, in.audio_cur < 8 ? in.audio_lang[in.audio_cur] : "");
       else { snprintf(val, sizeof(val), "one track"); dim = 1; }
       break;
+    case QM_LEVEL: label = "Leveller"; snprintf(val, sizeof(val), "%s", LEVELLER_NAMES[opts.leveller]); break;
     case QM_ZOOM: label = "Picture"; snprintf(val, sizeof(val), "%s", zoom ? "Zoom" : "Fit"); break;
     case QM_TESTCARD: label = "Test card"; break;
     case QM_HELP: label = "Show controls"; break;
@@ -938,6 +961,7 @@ static void handle_input(void)
     int dir = PRESSED(LEFT) ? -1 : PRESSED(RIGHT) ? 1 : FACE(PAD_A) ? 1 : 0;
     if (dir && qm_sel == QM_SLEEP) step_sleep(dir);
     if (dir && qm_sel == QM_AUDIO) step_audio(dir);
+    if (dir && qm_sel == QM_LEVEL) step_leveller(dir);
     if (dir && qm_sel == QM_ZOOM) set_zoom(!zoom);
     if (FACE(PAD_A) && qm_sel == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
     if (FACE(PAD_A) && qm_sel == QM_HELP) { qm_open = 0; welcome_on = 1; }

@@ -105,7 +105,8 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
   Normal/Loud/Off, tuning static volume, colour theme (Cable Navy / Teletext / Green Phosphor),
   tuning picture (classic snow / VHS), channel-change click
 - [x] Quick menu (X): sleep timer 15/30/60/90 min ("SLEEP 30", "SLEEP 1" warning, 5 s fade, then off until
-  any button), audio track, Fit/Zoom, test card, show controls
+  any button), audio track, volume leveller (session; default in System Settings), Fit/Zoom, test card,
+  show controls
 - [x] Audio track choice in the quick menu (re-tunes with the chosen track; subtitles not planned)
 - [ ] ~~Preview of the highlighted channel in the guide~~ not planned (needs a second stream); the guide previews the current one
 
