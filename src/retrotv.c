@@ -965,8 +965,11 @@ static uint16_t read_pad(void)
     RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
     RETRO_DEVICE_ID_JOYPAD_Y,
   };
-  for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
-    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, ids[i])) m |= (uint16_t)(1u << ids[i]);
+  /* any controller works the TV, like any remote in the house: players 1-4
+   * (e.g. a second pad, or a virtual pad such as Zaparoo's on player 2) */
+  for (unsigned port = 0; port < 4; port++)
+    for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
+      if (input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, ids[i])) m |= (uint16_t)(1u << ids[i]);
   return m;
 }
 

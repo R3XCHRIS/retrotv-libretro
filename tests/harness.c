@@ -28,6 +28,7 @@ static uint32_t *frame, *last;
 static double t_run;
 static double fps = 60;          /* current refresh; the core may switch it */
 static int held_button = -1;
+static unsigned held_port;          /* "p2.b" in a script presses B on player 2 */
 static double held_until;
 
 static double audio_sumsq; static size_t audio_n;
@@ -139,7 +140,7 @@ static int button_id(const char *w)
 static int16_t input_state(unsigned port, unsigned device, unsigned index, unsigned id)
 {
   (void)index;
-  if (port || device != RETRO_DEVICE_JOYPAD) return 0;
+  if (port != held_port || device != RETRO_DEVICE_JOYPAD) return 0;
   return (int)id == held_button && t_run < held_until;
 }
 
@@ -280,7 +281,10 @@ int main(int argc, char **argv)
       if (act[k].done || t_run < act[k].at) continue;
       act[k].done = 1;
       if (!strcmp(act[k].what, "shot")) continue;    /* taken after this frame */
-      held_button = button_id(act[k].what);
+      const char *w = act[k].what;
+      held_port = 0;
+      if (w[0] == 'p' && w[1] >= '1' && w[1] <= '4' && w[2] == '.') { held_port = (unsigned)(w[1] - '1'); w += 3; }
+      held_button = button_id(w);
       held_until = t_run + 0.1;
       printf("  [%6.2fs] press %s\n", t_run, act[k].what);
     }
