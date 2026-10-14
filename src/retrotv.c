@@ -27,6 +27,7 @@
 #include "m3u.h"
 #include "osd.h"
 #include "player.h"
+#include "remote.h"
 
 #define RETROTV_VERSION "0.2.0"
 /* Output refresh: 60 Hz, or 50 Hz while a 25/50 fps (PAL) channel plays so
@@ -119,6 +120,16 @@ static int welcome_save;           /* dismissed: write the 'seen' file (retried 
 static int blip_left;              /* audio frames of channel-change click still to play */
 #define BLIP_FRAMES (PLAYER_RATE / 25)   /* 40 ms */
 static char state_dir[1024];       /* where the core keeps its small files */
+
+/* Remote control: the server thread resolves a request and leaves it here;
+ * retro_run applies it. It reads chans (fixed while it runs) and the two
+ * published values below, never the UI state. */
+enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST };
+static atomic_int remote_req;          /* kind | channel index << 3, 0 = nothing */
+static atomic_int pub_cur = -1;        /* channel on screen, for /status */
+enum { PS_TUNING, PS_PLAYING, PS_NO_SIGNAL, PS_OFF, PS_TESTCARD, PS_NO_CHANNELS };
+static atomic_int pub_state = PS_NO_CHANNELS;
+static int remote_mode;                /* what the server runs as: opts.remote values */
 
 /* ---------- helpers ---------- */
 
@@ -739,6 +750,7 @@ static void send_audio(void)
 /* ---------- core options ---------- */
 
 static void follow_refresh(double fps);
+static void remote_update(void);
 
 static int saved_leveller = -1, saved_res240 = -1;  /* last values from System Settings */
 
@@ -784,6 +796,7 @@ static void check_options(void)
     apply_options();
     follow_refresh(0);                               /* a refresh lock applies right away */
     set_output(opts.res240);
+    remote_update();
     logf_(RETRO_LOG_INFO, "options: banner %.0fs, clock %s, leveller %s, static %d, hints %s, output %s", opts.banner_secs,
           opts.clock24 ? "24h" : "12h", opts.leveller == 2 ? "loud" : opts.leveller ? "normal" : "off",
           opts.static_vol, opts.hints ? "on" : "off", res240 ? "240p" : "480");
@@ -951,6 +964,116 @@ static double sleep_level(void)
   if (!sleep_at) return 1.0;
   double left = sleep_at - t_now();
   return left >= SLEEP_FADE ? 1.0 : left <= 0 ? 0.0 : left / SLEEP_FADE;
+}
+
+/* ---------- remote control ---------- */
+
+static const char REMOTE_HELP[] =
+  "RetroTV remote control\n"
+  "  /tune?ch=36           tune channel 36 (its number in the playlist)\n"
+  "  /tune?name=star+trek  tune by name (first match)\n"
+  "  /up  /down  /last     channel up, down, previous\n"
+  "  /status               what's on (JSON)\n";
+
+/* the server thread: answer from chans and the published state only */
+static int remote_answer(const remote_cmd *c, char *body, size_t n, void *ctx)
+{
+  (void)ctx;
+  static const char *const STATES[] = { "tuning", "playing", "no signal", "off", "test card", "no channels" };
+  switch (c->kind) {
+  case RC_HELP: snprintf(body, n, "%s", REMOTE_HELP); return 200;
+  case RC_NONE: snprintf(body, n, "not found\n\n%s", REMOTE_HELP); return 404;
+  case RC_BAD: snprintf(body, n, "{\"ok\":false,\"error\":\"bad request: use GET /tune?ch=<number> or ?name=<text>\"}"); return 400;
+  default: break;
+  }
+  if (!chans.count) { snprintf(body, n, "{\"ok\":false,\"error\":\"no channels loaded\"}"); return 503; }
+  int idx = atomic_load(&pub_cur);
+  if (c->kind == RC_TUNE) {
+    idx = remote_find(&chans, c->ch, c->name);
+    if (idx < 0) {
+      char w[140];
+      remote_json_str(w, sizeof(w), *c->ch ? c->ch : c->name);
+      snprintf(body, n, "{\"ok\":false,\"error\":\"no such channel\",\"asked\":%s}", w);
+      return 404;
+    }
+    atomic_store(&remote_req, RQ_TUNE | idx << 3);
+  } else if (c->kind == RC_UP || c->kind == RC_DOWN || c->kind == RC_LAST) {
+    atomic_store(&remote_req, c->kind == RC_UP ? RQ_UP : c->kind == RC_DOWN ? RQ_DOWN : RQ_LAST);
+    idx = -1;                                        /* known once applied: see /status */
+  }
+  if (c->kind != RC_STATUS && idx < 0) { snprintf(body, n, "{\"ok\":true}"); return 200; }
+  if (idx < 0 || (size_t)idx >= chans.count) idx = 0;
+  const m3u_channel *ch = &chans.ch[idx];
+  char num[48], name[200], now[200] = "null";
+  remote_json_str(num, sizeof(num), ch->number);
+  remote_json_str(name, sizeof(name), ch->name);
+  if (c->kind == RC_STATUS) {
+    pthread_mutex_lock(&guide_mu);
+    const epg_prog *pn, *px;
+    epg_now_next(guide_chan(guide, ch), time(NULL), &pn, &px);
+    if (pn) remote_json_str(now, sizeof(now), pn->title);
+    pthread_mutex_unlock(&guide_mu);
+    int st = atomic_load(&pub_state);
+    snprintf(body, n, "{\"ok\":true,\"ch\":%s,\"name\":%s,\"state\":\"%s\",\"now\":%s,\"channels\":%zu}",
+             num, name, STATES[st >= 0 && st <= PS_NO_CHANNELS ? st : 0], now, chans.count);
+  } else {
+    snprintf(body, n, "{\"ok\":true,\"ch\":%s,\"name\":%s}", num, name);
+  }
+  return 200;
+}
+
+/* start, stop or move the server to match the option (from retro_run / load) */
+static void remote_update(void)
+{
+  if (opts.remote == remote_mode) return;
+  remote_stop();
+  remote_mode = 0;
+  if (!opts.remote) { logf_(RETRO_LOG_INFO, "remote control off"); return; }
+  int e = remote_start(opts.remote == 2, REMOTE_PORT, remote_answer, NULL);
+  if (e) {
+    logf_(RETRO_LOG_WARN, "remote control: port %d: %s", REMOTE_PORT, strerror(e));
+    remote_mode = opts.remote;                       /* don't retry every frame */
+    return;
+  }
+  remote_mode = opts.remote;
+  logf_(RETRO_LOG_INFO, "remote control on %s:%d", opts.remote == 2 ? "all interfaces" : "127.0.0.1", REMOTE_PORT);
+}
+
+/* a request from the server thread: like a press on the remote */
+static void remote_apply(void)
+{
+  int r = atomic_exchange(&remote_req, 0);
+  if (!r || !chans.count) return;
+  int kind = r & 7;
+  size_t idx = (size_t)(r >> 3);
+  if (kind == RQ_UP) idx = (cur + 1) % chans.count;
+  else if (kind == RQ_DOWN) idx = cur ? cur - 1 : chans.count - 1;
+  else if (kind == RQ_LAST) idx = prev;
+  if (idx >= chans.count) return;
+  if (idx == cur && !asleep && !testcard_on && player_get_state(pl) != PLAYER_ERROR) {
+    banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);   /* already on: just say so */
+    qm_open = guide_open = list_open = welcome_on = 0;
+    return;
+  }
+  /* wake the set and clear the screen, as if the viewer picked up the remote */
+  asleep = testcard_on = welcome_on = 0;
+  qm_open = guide_open = list_open = 0;
+  logf_(RETRO_LOG_INFO, "remote: ch %s", chans.ch[idx].number);
+  tune(idx);
+}
+
+static void publish_state(void)
+{
+  int st = PS_TUNING;
+  if (asleep) st = PS_OFF;
+  else if (testcard_on) st = PS_TESTCARD;
+  else if (!chans.count) st = PS_NO_CHANNELS;
+  else {
+    player_state ps = player_get_state(pl);
+    st = ps == PLAYER_PLAYING ? PS_PLAYING : ps == PLAYER_ERROR ? PS_NO_SIGNAL : PS_TUNING;
+  }
+  atomic_store(&pub_state, st);
+  atomic_store(&pub_cur, chans.count ? (int)cur : -1);
 }
 
 /* ---------- input ---------- */
@@ -1153,6 +1276,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   } else {
     logf_(RETRO_LOG_WARN, "no channels: %s", help_reason);
   }
+  remote_update();
   return true;          /* show the help screen rather than a cryptic load error */
 }
 
@@ -1161,6 +1285,10 @@ RETRO_API bool retro_load_game_special(unsigned t, const struct retro_game_info 
 RETRO_API void retro_unload_game(void)
 {
   log_stats();
+  remote_stop();                                     /* it reads chans */
+  remote_mode = 0;
+  atomic_store(&remote_req, 0);
+  atomic_store(&pub_cur, -1);
   guide_shutdown();
   if (pl) { player_destroy(pl); pl = NULL; }
   for (int i = 0; i < 200 && atomic_load(&saving); i++) {      /* let a pending write finish (max 2 s) */
@@ -1184,7 +1312,9 @@ RETRO_API void retro_run(void)
   input_poll_cb();
   check_options();
   handle_input();
+  remote_apply();
   sleep_tick();
+  publish_state();
 
   if (asleep) {                                      /* switched off: black and silent */
     memset(fb, 0, sizeof(fb));

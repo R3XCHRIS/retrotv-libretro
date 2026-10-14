@@ -73,13 +73,12 @@ features are configured in Dispatcharr and selected through the playlist URL:
 
 | File | Role |
 |---|---|
-| File | Role |
-|---|---|
 | `src/retrotv.c` | libretro entry points, input, UI state and screens (banner, list, X menu, setup, welcome), sleep timer, guide fetch thread, saved state |
 | `src/player.c` | a stream per tune: FFmpeg demux/decode thread → video ring (6 frames) + audio ring (3 s), audio is the master clock; old streams closed by a reaper thread; zoom crop, overscan margin, audio track choice |
 | `src/ffapi.c/.h` | FFmpeg functions resolved with `dlopen` by soname. To use a new FFmpeg function, add it to `RETROTV_FF_FUNCS` and call it as `p_<name>` |
 | `src/m3u.c/.h` | IPTV M3U parser (`#EXTINF` tvg-* attributes, `x-tvg-url`, relative paths) |
 | `src/plconf.c` | playlist.txt: the playlist line and `epg=` |
+| `src/remote.c/.h` | remote control: tiny HTTP server thread on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/status`); requests are queued and applied in `retro_run` |
 | `src/epg.c` | XMLTV parser (time window, entities, display names), `epg_lookup`, clock and title helpers |
 | `src/gunzip.c` | `.xml.gz` guides via the system zlib (`dlopen`) |
 | `src/guide.c` | TV guide screen |
@@ -147,13 +146,22 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   entry; changes reach the core live (GET_VARIABLE_UPDATE).
 - Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
   and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
-  `/media/sd/captures/<system>/`. `get_info` reports the display refresh (50/60 Hz).
+  `<storage>/captures/<system>/` (e.g. `/media/nfs/captures/avtest/`). `get_info` reports the display refresh (50/60 Hz).
 - Users install with the one-liner (`install.sh` at the repo root, `curl … | bash` on the Pi as root):
   it downloads the latest GitHub Release, checks `SHA256SUMS`, copies the core and the
   Extras scripts (install, uninstall, update) and runs `retrotv_install.sh`. Releases are
   made by `.github/workflows/release.yml` when a `v*` tag is pushed; bump `RETROTV_VERSION`.
   Test the installer against a local copy of the release with `RETROTV_BASE=file:///dir`.
 - Screenshots for the docs: `PI=root@<pi> scripts/demo-shots.sh` (demo line-up, never real channels).
+- Autostart (verified 2.0.60): ReplayOS reads a file in `<storage>/roms/_autostart/` at start
+  (we used the name `audio_video_test.lr`). Its content is a path appended to the storage root
+  with no slash, so it starts with `/`: `/roms/avtest/retrotv.lr`. The core comes from the
+  parent folder's name → `cores.cfg` section, which is why `_extra/...` fails ("Failed to
+  identify the core") and an empty `roms/avtest/retrotv.lr` works. Errors: `/var/log/replay.log`.
+- Zaparoo Core (user-installed in `/media/sd/zaparoo/`, API on 7497): its `**launch:` can't
+  start Extras; use autostart. Its virtual gamepad is player 2 (RetroTV reads players 1-4),
+  and menus need ReplayOS's "all players control the UI". Tags tune with
+  `**http.get:http://127.0.0.1:7474/tune?ch=<n>` (RetroTV's remote control option).
 - The long-term fix is an official "user cores" hook from the ReplayOS author.
 
 ## Roadmap and design
