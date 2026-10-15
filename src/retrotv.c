@@ -30,7 +30,7 @@
 #include "remote.h"
 #include "webui.h"
 
-#define RETROTV_VERSION "0.2.2"
+#define RETROTV_VERSION "0.2.3"
 /* Output refresh: 60 Hz, or 50 Hz while a 25/50 fps (PAL) channel plays so
  * every frame is held equally long. Audio frames per run follow the rate. */
 #define AFRAMES_MAX ((size_t)(PLAYER_RATE / 50))   /* 960 stereo frames per run at 50 Hz */
@@ -1421,6 +1421,16 @@ RETRO_API void retro_run(void)
     played_at = t_now();
     banner_until = t_now() + opts.banner_secs;   /* show what came on */
     follow_refresh(in.fps);
+  }
+
+  if (st == PLAYER_PLAYING && logged_playing && stream_fps <= 0) {   /* frame rate measured after it started */
+    player_info in;
+    player_get_info(pl, &in);
+    if (in.fps > 0) {
+      logf_(RETRO_LOG_INFO, "ch %s frame rate %.3f fps (%dx%d)", chans.ch[cur].number, in.fps, in.width, in.height);
+      follow_refresh(in.fps);
+      stream_fps = in.fps;                           /* once, even if the frontend refused a change */
+    }
   }
 
   int se = atomic_exchange(&save_errno, 0);
