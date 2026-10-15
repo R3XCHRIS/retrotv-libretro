@@ -11,6 +11,7 @@
 
 #include "aspect.h"
 #include "ffapi.h"
+#include "vsmooth.h"
 
 #define VQ 6                                  /* decoded video frames held */
 #define AQ_FRAMES (PLAYER_RATE * 3)           /* 3 s of audio */
@@ -53,6 +54,10 @@ struct stream {
   atomic_int *margin;           /* the player's overscan margin, percent per side */
   aspect_tracker bars;          /* decode thread only */
   long vframes;                 /* decode thread only */
+  vsmooth vsm;                  /* decode thread only: evens out jittery timestamps */
+  double gaps[VSMOOTH_GAPS];    /* decode thread only: frame gaps, to measure an unknown rate */
+  int ngaps;
+  double last_raw_vpts;
   uint32_t *shown;              /* last picture handed out */
   int have_shown;
   player_stats stats;
@@ -273,7 +278,7 @@ static void *thread_main(void *arg)
     snprintf(p->info.vcodec, sizeof(p->info.vcodec), "%s", c->name);
     p->info.width = st->codecpar->width;
     p->info.height = st->codecpar->height;
-    if (st->avg_frame_rate.den) p->info.fps = (double)st->avg_frame_rate.num / st->avg_frame_rate.den;
+    p->info.fps = vsmooth_plausible(st->avg_frame_rate.num, st->avg_frame_rate.den);   /* 0: measured later */
     pthread_mutex_unlock(&p->mu);
     p->has_video = 1;
   }
@@ -311,6 +316,8 @@ static void *thread_main(void *arg)
       double pts = fr->best_effort_timestamp == AV_NOPTS_VALUE ? NAN
                    : (double)fr->best_effort_timestamp * st->time_base.num / st->time_base.den;
       if (dec == vdec) {
+        if (p->ngaps < VSMOOTH_GAPS && !isnan(pts) && !isnan(p->last_raw_vpts)) p->gaps[p->ngaps++] = pts - p->last_raw_vpts;
+        p->last_raw_vpts = pts;
         if (wait_space(p, 1, 0)) break;
         int ox, oy, ow, oh;
         AVRational sar = fr->sample_aspect_ratio.num ? fr->sample_aspect_ratio : st->sample_aspect_ratio;
@@ -329,17 +336,19 @@ static void *thread_main(void *arg)
           p->info.native = native;
           /* a quick re-tune can open before the stream info is known */
           if (!p->info.width) { p->info.width = fr->width; p->info.height = fr->height; }
-          if (p->info.fps <= 0) {
-            AVRational r = st->avg_frame_rate.den ? st->avg_frame_rate : st->r_frame_rate;
-            if (r.den && r.num) p->info.fps = (double)r.num / r.den;
+          if (p->info.fps <= 0) {                     /* declared late, or never: measure it */
+            double f = vsmooth_plausible(st->avg_frame_rate.num, st->avg_frame_rate.den);
+            if (f <= 0 && p->ngaps >= VSMOOTH_GAPS) f = vsmooth_rate(p->gaps, p->ngaps);
+            if (f > 0) p->info.fps = f;
           }
+          double fps = p->info.fps;
           pthread_mutex_unlock(&p->mu);
           if (ow != PLAYER_W || oh != PLAYER_H) memset(slot->px, 0, (size_t)PLAYER_W * PLAYER_H * 4);
           uint8_t *dst[4] = { (uint8_t *)(slot->px + (size_t)oy * PLAYER_W + ox), NULL, NULL, NULL };
           int dstride[4] = { PLAYER_W * 4, 0, 0, 0 };
           p_sws_scale(sws, (const uint8_t *const *)fr->data, fr->linesize, 0, fr->height, dst, dstride);
           pthread_mutex_lock(&p->mu);
-          slot->pts = pts;
+          slot->pts = vsmooth_pts(&p->vsm, pts, fps);
           p->vcount++;
           pthread_mutex_unlock(&p->mu);
         }
@@ -436,6 +445,9 @@ static void reset_buffers(stream *p)
   memset(&p->stats, 0, sizeof(p->stats));
   aspect_track_reset(&p->bars);
   p->vframes = 0;
+  vsmooth_reset(&p->vsm);
+  p->ngaps = 0;
+  p->last_raw_vpts = NAN;
 }
 
 static int stream_open(stream *p, const char *url, int want_audio)
