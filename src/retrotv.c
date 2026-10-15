@@ -1423,6 +1423,16 @@ RETRO_API void retro_run(void)
     follow_refresh(in.fps);
   }
 
+  if (st == PLAYER_PLAYING && logged_playing && stream_fps <= 0) {   /* frame rate measured after it started */
+    player_info in;
+    player_get_info(pl, &in);
+    if (in.fps > 0) {
+      logf_(RETRO_LOG_INFO, "ch %s frame rate %.3f fps (%dx%d)", chans.ch[cur].number, in.fps, in.width, in.height);
+      follow_refresh(in.fps);
+      stream_fps = in.fps;                           /* once, even if the frontend refused a change */
+    }
+  }
+
   int se = atomic_exchange(&save_errno, 0);
   if (se) logf_(RETRO_LOG_WARN, "could not save last channel to %s: %s", last_path, strerror(se));
   if (atomic_load(&guide_msg_ready)) {
