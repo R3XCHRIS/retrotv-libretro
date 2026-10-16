@@ -104,6 +104,21 @@ int main(void)
   CHECK(g && g->nprog == 0);
   epg_free(g);
 
+  /* programme posters: <icon src>, entities decoded; none -> NULL */
+  g = epg_parse("<tv><programme start=\"20261013190000 +0000\" stop=\"20261013200000 +0000\" channel=\"a\">"
+                "<title>One</title><icon src=\"http://h/p.jpg?w=1&amp;h=2\" /></programme>"
+                "<programme start=\"20261013200000 +0000\" stop=\"20261013210000 +0000\" channel=\"a\">"
+                "<title>Two</title><iconic>x</iconic></programme>"
+                "<programme start=\"20261013203000 +0000\" stop=\"20261013204500 +0000\" channel=\"a\">"
+                "<title>Three</title><icon src=\"\"/></programme></tv>", from, to);
+  CHECK(g && g->nch == 1 && g->ch[0].n == 3);
+  if (g && g->nch == 1 && g->ch[0].n == 3) {
+    CHECK(g->ch[0].p[0].icon && !strcmp(g->ch[0].p[0].icon, "http://h/p.jpg?w=1&h=2"));
+    CHECK(!g->ch[0].p[1].icon);                          /* <iconic> is not <icon> */
+    CHECK(!g->ch[0].p[2].icon);                          /* empty src */
+  }
+  epg_free(g);
+
   if (fails) return 1;
   printf("test_epg: all passed\n");
   return 0;

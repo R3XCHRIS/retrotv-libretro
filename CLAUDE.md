@@ -78,7 +78,7 @@ features are configured in Dispatcharr and selected through the playlist URL:
 | `src/ffapi.c/.h` | FFmpeg functions resolved with `dlopen` by soname. To use a new FFmpeg function, add it to `RETROTV_FF_FUNCS` and call it as `p_<name>` |
 | `src/m3u.c/.h` | IPTV M3U parser (`#EXTINF` tvg-* attributes, `x-tvg-url`, relative paths) |
 | `src/plconf.c` | playlist.txt: the playlist line and `epg=` |
-| `src/remote.c/.h` | remote control: tiny HTTP server thread on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/status`, `/channels`); requests are queued and applied in `retro_run`. `RETROTV_REMOTE_PORT` overrides the port (tests beside an installed RetroTV) |
+| `src/remote.c/.h` | remote control: tiny HTTP server thread on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/status`, `/channels` with logos and XMLTV `<icon>` posters, `/settings`, `/set?sleep=&audio=&leveller=&picture=&output=`); requests are queued and applied in `retro_run`, settings through the X menu's own setters (a snapshot is published for the server thread under `remote_mu`). `RETROTV_REMOTE_PORT` overrides the port (tests beside an installed RetroTV) |
 | `src/webui.html` → `src/webui.c` | the phone remote page served at `/`; edit the HTML, then `make src/webui.c` (`make check` fails if they differ). Self-contained: no external fonts or scripts |
 | `src/epg.c` | XMLTV parser (time window, entities, display names), `epg_lookup`, clock and title helpers |
 | `src/gunzip.c` | `.xml.gz` guides via the system zlib (`dlopen`) |
