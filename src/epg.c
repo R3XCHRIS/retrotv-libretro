@@ -204,6 +204,22 @@ static char *child(const char *s, const char *e, const char *name, size_t max)
   return NULL;
 }
 
+/* src of the first <icon .../> in [s, e), entities decoded (&amp; in URLs); NULL if none */
+static char *icon_src(const char *s, const char *e)
+{
+  for (const char *p = s; p && p < e; p++) {
+    p = memchr(p, '<', (size_t)(e - p));
+    if (!p) return NULL;
+    if (!strncmp(p, "<icon", 5) && (p[5] == ' ' || p[5] == '\t' || p[5] == '\n')) {
+      const char *gt = memchr(p, '>', (size_t)(e - p));
+      char raw[1024];
+      if (!gt || attr(p, gt, "src", raw, sizeof(raw)) || !*raw) return NULL;
+      return xml_text(raw, raw + strlen(raw), sizeof(raw));
+    }
+  }
+  return NULL;
+}
+
 static int cmp_item(const void *a, const void *b)
 {
   const item *x = a, *y = b;
@@ -213,7 +229,7 @@ static int cmp_item(const void *a, const void *b)
 
 static int cmp_chan(const void *key, const void *c) { return strcmp(key, ((const epg_chan *)c)->id); }
 
-static void free_prog(epg_prog *p) { free(p->title); free(p->sub); free(p->desc); }
+static void free_prog(epg_prog *p) { free(p->title); free(p->sub); free(p->desc); free(p->icon); }
 
 /* lowercase letters and digits only; a trailing "hd" dropped ("BBC One HD" -> "bbcone") */
 static void norm(const char *s, char *out, size_t n)
@@ -288,7 +304,8 @@ epg *epg_parse(const char *xml, time_t from, time_t to)
     }
     item *x = &it[n];
     x->chan = strdup(chan);
-    x->p = (epg_prog){ t0, t1, title, child(gt + 1, end, "sub-title", 256), child(gt + 1, end, "desc", DESC_MAX) };
+    x->p = (epg_prog){ t0, t1, title, child(gt + 1, end, "sub-title", 256), child(gt + 1, end, "desc", DESC_MAX),
+                       icon_src(gt + 1, end) };
     if (!x->chan) { free_prog(&x->p); goto fail; }
     n++;
     p = end;
@@ -307,7 +324,7 @@ epg *epg_parse(const char *xml, time_t from, time_t to)
     c->n = j - i;
     for (size_t k = i; k < j; k++) {
       ps[k - i] = it[k].p;
-      it[k].p.title = it[k].p.sub = it[k].p.desc = NULL;   /* moved */
+      it[k].p.title = it[k].p.sub = it[k].p.desc = it[k].p.icon = NULL;   /* moved */
       if (k > i) { free(it[k].chan); it[k].chan = NULL; }
     }
     it[i].chan = NULL;                                       /* now owned by the channel */

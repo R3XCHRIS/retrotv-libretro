@@ -131,6 +131,17 @@ static atomic_int pub_cur = -1;        /* channel on screen, for /status */
 enum { PS_TUNING, PS_PLAYING, PS_NO_SIGNAL, PS_OFF, PS_TESTCARD, PS_NO_CHANNELS };
 static atomic_int pub_state = PS_NO_CHANNELS;
 static int remote_mode;                /* what the server runs as: opts.remote values */
+/* Settings from the phone page: retro_run publishes a snapshot for the server
+ * thread, which leaves requested changes in rset for retro_run to apply. */
+typedef struct {
+  int sleep_min, sleep_left;           /* timer setting and minutes left (0 = off) */
+  int leveller, zoom, res240;
+  int audio_cur, naudio;
+  char audio_lang[8][8];
+} remote_snap;
+static pthread_mutex_t remote_mu = PTHREAD_MUTEX_INITIALIZER;
+static remote_snap pubset;             /* under remote_mu */
+static remote_cmd rset;                /* under remote_mu: kind RC_SET when something waits */
 
 /* ---------- helpers ---------- */
 
@@ -976,7 +987,9 @@ static const char REMOTE_HELP[] =
   "  /tune?name=star+trek  tune by name (first match)\n"
   "  /up  /down  /last     channel up, down, previous\n"
   "  /status               what's on (JSON)\n"
-  "  /channels             every channel with Now/Next (JSON)\n";
+  "  /channels             every channel with Now/Next, logos and posters (JSON)\n"
+  "  /settings             sleep timer, audio track, leveller, picture, output (JSON)\n"
+  "  /set?sleep=30&audio=2&leveller=loud&picture=zoom&output=240   change any of them\n";
 
 /* "now":{"title":..,"start":..,"stop":..},"next":{..} for one channel (guide_mu held) */
 static void remote_now_next(remote_buf *b, const m3u_channel *ch, time_t t)
@@ -989,7 +1002,9 @@ static void remote_now_next(remote_buf *b, const m3u_channel *ch, time_t t)
     if (!ps[k]) { remote_puts(b, "null"); continue; }
     remote_puts(b, "{\"title\":");
     remote_json(b, ps[k]->title);
-    remote_printf(b, ",\"start\":%lld,\"stop\":%lld}", (long long)ps[k]->start, (long long)ps[k]->stop);
+    remote_printf(b, ",\"start\":%lld,\"stop\":%lld,\"icon\":", (long long)ps[k]->start, (long long)ps[k]->stop);
+    remote_json(b, ps[k]->icon);
+    remote_puts(b, "}");
   }
 }
 
@@ -1002,7 +1017,7 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
   case RC_PAGE: b->type = "text/html; charset=utf-8"; remote_puts(b, webui_page); return 200;
   case RC_HELP: remote_puts(b, REMOTE_HELP); return 200;
   case RC_NONE: remote_printf(b, "not found\n\n%s", REMOTE_HELP); return 404;
-  case RC_BAD: remote_puts(b, "{\"ok\":false,\"error\":\"bad request: use GET /tune?ch=<number> or ?name=<text>\"}"); return 400;
+  case RC_BAD: remote_puts(b, "{\"ok\":false,\"error\":\"bad request: see /help\"}"); return 400;
   default: break;
   }
   if (!chans.count) { remote_puts(b, "{\"ok\":false,\"error\":\"no channels loaded\"}"); return 503; }
@@ -1023,12 +1038,60 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
       remote_json(b, ch->name);
       remote_puts(b, ",\"group\":");
       remote_json(b, ch->group);
+      remote_puts(b, ",\"logo\":");
+      remote_json(b, ch->logo && *ch->logo ? ch->logo : NULL);
       remote_now_next(b, ch, t);
       remote_puts(b, "}");
     }
     pthread_mutex_unlock(&guide_mu);
     remote_puts(b, "]}");
     return 200;
+  case RC_SETTINGS: {
+    remote_snap v;
+    pthread_mutex_lock(&remote_mu);
+    v = pubset;
+    pthread_mutex_unlock(&remote_mu);
+    static const char *const LEV[3] = { "off", "normal", "loud" };
+    remote_printf(b, "{\"ok\":true,\"sleep\":%d,\"sleep_left\":%d,\"sleep_steps\":[", v.sleep_min, v.sleep_left);
+    for (size_t i = 0; i < sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0]); i++) remote_printf(b, "%s%d", i ? "," : "", SLEEP_STEPS[i]);
+    remote_printf(b, "],\"audio\":%d,\"audio_tracks\":[", v.audio_cur + 1);
+    for (int i = 0; i < v.naudio && i < 8; i++) {
+      if (i) remote_puts(b, ",");
+      remote_json(b, v.audio_lang[i]);
+    }
+    remote_printf(b, "],\"leveller\":\"%s\",\"picture\":\"%s\",\"output\":\"%s\"}",
+                  LEV[v.leveller >= 0 && v.leveller <= 2 ? v.leveller : 1], v.zoom ? "zoom" : "fit", v.res240 ? "240" : "480");
+    return 200;
+  }
+  case RC_SET: {
+    int ok_sleep = c->sleep < 0;
+    for (size_t i = 0; !ok_sleep && i < sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0]); i++) ok_sleep = SLEEP_STEPS[i] == c->sleep;
+    if (!ok_sleep) {
+      remote_puts(b, "{\"ok\":false,\"error\":\"sleep must be one of");
+      for (size_t i = 0; i < sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0]); i++) remote_printf(b, " %d", SLEEP_STEPS[i]);
+      remote_puts(b, "\"}");
+      return 400;
+    }
+    pthread_mutex_lock(&remote_mu);
+    int naudio = pubset.naudio;
+    if (c->audio > 0 && c->audio > naudio) {
+      pthread_mutex_unlock(&remote_mu);
+      remote_printf(b, "{\"ok\":false,\"error\":\"this channel has %d audio track%s\"}", naudio, naudio == 1 ? "" : "s");
+      return 400;
+    }
+    if (rset.kind != RC_SET) {                       /* merge with anything not applied yet */
+      rset = *c;
+    } else {
+      if (c->sleep >= 0) rset.sleep = c->sleep;
+      if (c->audio > 0) rset.audio = c->audio;
+      if (c->leveller >= 0) rset.leveller = c->leveller;
+      if (c->picture >= 0) rset.picture = c->picture;
+      if (c->output >= 0) rset.output = c->output;
+    }
+    pthread_mutex_unlock(&remote_mu);
+    remote_puts(b, "{\"ok\":true}");
+    return 200;
+  }
   case RC_TUNE:
     idx = remote_find(&chans, c->ch, c->name);
     if (idx < 0) {
@@ -1089,8 +1152,31 @@ static void remote_update(void)
 }
 
 /* a request from the server thread: like a press on the remote */
+static void remote_apply_settings(void)
+{
+  remote_cmd c;
+  pthread_mutex_lock(&remote_mu);
+  c = rset;
+  rset.kind = RC_NONE;
+  pthread_mutex_unlock(&remote_mu);
+  if (c.kind != RC_SET) return;
+  logf_(RETRO_LOG_INFO, "remote: settings sleep %d audio %d leveller %d picture %d output %d",
+        c.sleep, c.audio, c.leveller, c.picture, c.output);
+  if (c.sleep >= 0 && c.sleep != sleep_min && !asleep) set_sleep(c.sleep);
+  if (c.leveller >= 0 && c.leveller != opts.leveller) set_leveller(c.leveller);
+  if (c.output >= 0 && c.output != res240) { set_output(c.output); show_toast(res240 ? "240P" : "480"); }
+  if (!chans.count || asleep || testcard_on) return;
+  if (c.picture >= 0 && c.picture != zoom) set_zoom(c.picture);
+  if (c.audio > 0) {
+    player_info in;
+    player_get_info(pl, &in);
+    if (c.audio <= in.naudio && c.audio - 1 != in.audio_cur) step_audio(c.audio - 1 - in.audio_cur);
+  }
+}
+
 static void remote_apply(void)
 {
+  remote_apply_settings();
   int r = atomic_exchange(&remote_req, 0);
   if (!r || !chans.count) return;
   int kind = r & 7;
@@ -1123,6 +1209,23 @@ static void publish_state(void)
   }
   atomic_store(&pub_state, st);
   atomic_store(&pub_cur, chans.count ? (int)cur : -1);
+  if (frame_no % 15) return;                         /* settings: 4 times a second is plenty */
+  remote_snap v = { 0 };
+  v.sleep_min = sleep_min;
+  v.sleep_left = sleep_at ? (int)ceil((sleep_at - t_now()) / SLEEP_UNIT) : 0;
+  v.leveller = opts.leveller;
+  v.zoom = zoom;
+  v.res240 = res240;
+  if (pl && chans.count && !asleep && !testcard_on) {
+    player_info in;
+    player_get_info(pl, &in);
+    v.audio_cur = in.audio_cur;
+    v.naudio = in.naudio;
+    memcpy(v.audio_lang, in.audio_lang, sizeof(v.audio_lang));
+  }
+  pthread_mutex_lock(&remote_mu);
+  pubset = v;
+  pthread_mutex_unlock(&remote_mu);
 }
 
 /* ---------- input ---------- */
@@ -1338,6 +1441,7 @@ RETRO_API void retro_unload_game(void)
   remote_mode = 0;
   atomic_store(&remote_req, 0);
   atomic_store(&pub_cur, -1);
+  rset.kind = RC_NONE;                               /* the server is stopped: no lock needed */
   guide_shutdown();
   if (pl) { player_destroy(pl); pl = NULL; }
   for (int i = 0; i < 200 && atomic_load(&saving); i++) {      /* let a pending write finish (max 2 s) */
