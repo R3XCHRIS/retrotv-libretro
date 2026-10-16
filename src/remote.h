@@ -10,16 +10,23 @@
 
 #define REMOTE_PORT 7474
 
-typedef enum { RC_NONE, RC_PAGE, RC_HELP, RC_STATUS, RC_CHANNELS, RC_TUNE, RC_UP, RC_DOWN, RC_LAST, RC_BAD } remote_kind;
+typedef enum { RC_NONE, RC_PAGE, RC_HELP, RC_STATUS, RC_CHANNELS, RC_SETTINGS, RC_SET, RC_TUNE, RC_UP, RC_DOWN, RC_LAST, RC_BAD } remote_kind;
 
 typedef struct {
   remote_kind kind;
   char ch[32];         /* /tune?ch=36 (decoded) */
   char name[96];       /* /tune?name=next%20generation (decoded) */
+  /* /set?sleep=30&audio=2&leveller=loud&picture=zoom&output=240: -1 = not given */
+  int sleep;           /* minutes, 0 = off (the core checks it's one of its steps) */
+  int audio;           /* track, 1-based */
+  int leveller;        /* 0 off, 1 normal, 2 loud */
+  int picture;         /* 0 fit, 1 zoom */
+  int output;          /* 0 = 640x480, 1 = 240p */
 } remote_cmd;
 
 /* Parse an HTTP request's first line ("GET /tune?ch=36 HTTP/1.1").
- * Unknown paths give RC_NONE (404), other methods or a bad /tune RC_BAD (400). */
+ * Unknown paths give RC_NONE (404), other methods, a bad /tune or a /set
+ * with no valid setting (or any invalid one) RC_BAD (400). */
 void remote_parse(const char *request, remote_cmd *c);
 
 /* Channel index for /tune: ch matches the channel number exactly; name
