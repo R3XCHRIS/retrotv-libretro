@@ -12,6 +12,7 @@ typedef struct {
   char *title;
   char *sub;               /* sub-title, may be NULL */
   char *desc;              /* may be NULL; shortened */
+  char *icon;              /* poster/thumbnail URL from <icon src>, may be NULL */
 } epg_prog;
 
 typedef struct {

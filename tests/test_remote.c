@@ -82,6 +82,28 @@ int main(void)
   CHECK(c.kind == RC_HELP);
   remote_parse("GET /channels?x=1 HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_CHANNELS);
+  remote_parse("GET /settings HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SETTINGS);
+  remote_parse("GET /set?sleep=30&audio=2&leveller=Loud&picture=zoom&output=240 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SET && c.sleep == 30 && c.audio == 2 && c.leveller == 2 && c.picture == 1 && c.output == 1);
+  remote_parse("GET /set?sleep=0 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SET && c.sleep == 0 && c.audio == -1 && c.leveller == -1 && c.picture == -1 && c.output == -1);
+  remote_parse("GET /set?leveller=off&output=480 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SET && c.leveller == 0 && c.output == 0 && c.sleep == -1);
+  remote_parse("GET /set HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);                                 /* nothing to set */
+  remote_parse("GET /set?volume=11 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);                                 /* unknown only */
+  remote_parse("GET /set?picture=fit&output=720 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);                                 /* one invalid spoils it */
+  remote_parse("GET /set?sleep=-5 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
+  remote_parse("GET /set?sleep=15min HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
+  remote_parse("GET /set?audio=0 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);                                 /* tracks count from 1 */
+  remote_parse("GET /set?audio= HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
   remote_parse("GET /tuner HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_NONE);
   remote_parse("DELETE /up HTTP/1.1\r\n", &c);

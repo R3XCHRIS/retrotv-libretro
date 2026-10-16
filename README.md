@@ -171,8 +171,10 @@ While RetroTV is playing, it answers simple web requests on port **7474**.
 **On your phone:** set **System Settings → Remote control → Home network**, then
 open `http://<your-pi>:7474/` in the browser (add it to your home screen for one
 tap). You get the channel on now, CH up/down and LAST buttons, and every channel
-with what's on now and next. Tap a channel to watch it, or search by channel or
-programme.
+with what's on now and next, with the programme's picture from the guide (or the
+channel logo). Tap a channel to watch it, or search by channel or programme. The
+⚙ button opens the quick settings: sleep timer, audio track, volume leveller,
+Fit/Zoom and 480/240p, the same as the X menu on the TV.
 
 <p align="center">
   <img src="docs/screenshots/web-remote.png" width="300" alt="Remote control page on a phone">
@@ -185,7 +187,9 @@ programme.
 | `/tune?name=star+trek` | tune by name: exact first, else the first name that contains it |
 | `/up`, `/down`, `/last` | channel up, down, previous |
 | `/status` | what's on, as JSON: channel, name, state, programme now and next |
-| `/channels` | every channel (number, name, group) with Now/Next and their times, as JSON |
+| `/channels` | every channel (number, name, group, logo) with Now/Next, their times and poster images, as JSON |
+| `/settings` | sleep timer, audio track, volume leveller, picture and output, as JSON |
+| `/set?sleep=30&leveller=loud` | change settings: `sleep` (0, 15, 30, 60, 90), `audio` (track 1, 2, ...), `leveller` (off, normal, loud), `picture` (fit, zoom), `output` (480, 240) |
 | `/help` | this list, as text |
 
 ```bash

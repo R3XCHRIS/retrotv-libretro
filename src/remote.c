@@ -64,9 +64,43 @@ static int query_get(const char *q, size_t qlen, const char *key, char *out, siz
   return 0;
 }
 
+/* /set?...: each setting given must be valid; at least one */
+static int parse_set(const char *q, size_t qlen, remote_cmd *c)
+{
+  char v[32], *e;
+  int any = 0;
+  if (query_get(q, qlen, "sleep", v, sizeof(v))) {
+    long m = strtol(v, &e, 10);
+    if (!*v || *e || m < 0 || m > 600) return -1;
+    c->sleep = (int)m; any = 1;
+  }
+  if (query_get(q, qlen, "audio", v, sizeof(v))) {
+    long t = strtol(v, &e, 10);
+    if (!*v || *e || t < 1 || t > 8) return -1;
+    c->audio = (int)t; any = 1;
+  }
+  if (query_get(q, qlen, "leveller", v, sizeof(v))) {
+    c->leveller = !strcasecmp(v, "off") ? 0 : !strcasecmp(v, "normal") ? 1 : !strcasecmp(v, "loud") ? 2 : -2;
+    if (c->leveller < 0) return -1;
+    any = 1;
+  }
+  if (query_get(q, qlen, "picture", v, sizeof(v))) {
+    c->picture = !strcasecmp(v, "fit") ? 0 : !strcasecmp(v, "zoom") ? 1 : -2;
+    if (c->picture < 0) return -1;
+    any = 1;
+  }
+  if (query_get(q, qlen, "output", v, sizeof(v))) {
+    c->output = !strcmp(v, "480") ? 0 : !strcmp(v, "240") ? 1 : -2;
+    if (c->output < 0) return -1;
+    any = 1;
+  }
+  return any ? 0 : -1;
+}
+
 void remote_parse(const char *req, remote_cmd *c)
 {
   memset(c, 0, sizeof(*c));
+  c->sleep = c->audio = c->leveller = c->picture = c->output = -1;
   const char *sp = strchr(req, ' ');
   if (!sp) { c->kind = RC_BAD; return; }
   size_t ml = (size_t)(sp - req);
@@ -83,6 +117,8 @@ void remote_parse(const char *req, remote_cmd *c)
   else if (IS("/help")) c->kind = RC_HELP;
   else if (IS("/status")) c->kind = RC_STATUS;
   else if (IS("/channels")) c->kind = RC_CHANNELS;
+  else if (IS("/settings")) c->kind = RC_SETTINGS;
+  else if (IS("/set")) c->kind = parse_set(q, qlen, c) ? RC_BAD : RC_SET;
   else if (IS("/up")) c->kind = RC_UP;
   else if (IS("/down")) c->kind = RC_DOWN;
   else if (IS("/last")) c->kind = RC_LAST;
