@@ -464,14 +464,16 @@ static void draw_welcome(osd_surface *s)
   static const char *rows[][2] = {
     { "UP / DOWN", "change channel" }, { "A", "what's on (banner)" }, { "B", "last channel" },
     { "Y", "zoom / fit picture" }, { "X", "menu: sleep, audio, leveller, test card" }, { "START", "TV guide" },
-    { "SELECT", "channel list" },
+    { "SELECT", "channel list (left/right: a page)" },
+    { "LEFT/RIGHT", "screen 1 / screen 2 (sound follows)" },
   };
-  for (int i = 0; i < 7; i++) {
+  int n = dual ? 8 : 7, more = dual ? 22 : 0;        /* the last row only with two screens */
+  for (int i = 0; i < n; i++) {
     osd_text_shadow(s, x + 24, y + 52 + i * 30, rows[i][0], 2, TH->accent);
     osd_text(s, x + 200, y + 56 + i * 30, rows[i][1], 1, TH->text);
   }
-  osd_text(s, x + 24, y + 270, "Settings: ReplayOS menu > System Settings", 1, TH->sub);
-  osd_text_shadow(s, x + 24, y + 298, "Press A to start watching", 2, TH->text);
+  osd_text(s, x + 24, y + 270 + more, "Settings: ReplayOS menu > System Settings", 1, TH->sub);
+  osd_text_shadow(s, x + 24, y + 298 + more / 2 + 4, "Press A to start watching", 2, TH->text);
 }
 
 /* ---------- playlist lookup ---------- */

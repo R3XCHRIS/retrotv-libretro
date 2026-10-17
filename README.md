@@ -106,9 +106,10 @@ Button names are the labels on an Xbox-style pad.
 | A | What's on (banner) |
 | B | Last channel |
 | Y | Zoom: letterboxed (Fit) or fill the screen (Zoom), remembered per channel |
-| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls |
+| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls (with two screens: Screen 2 on/off and Swap screens instead of 480/240p) |
 | Start | TV guide: Up/Down channel, Left/Right 30 minutes, A to watch, B to close |
-| Select | Channel list |
+| Select | Channel list: Up/Down one channel, Left/Right a page, A to watch, B to close |
+| Left / Right | With [two screens](#two-screens): move the focus (and the sound) to screen 1 / screen 2 |
 
 <p align="center">
   <img src="docs/screenshots/menu.png" width="266" alt="X menu">
@@ -185,7 +186,7 @@ With two CRTs on the Pi 5's two HDMI ports, RetroTV can play a channel on each.
 
 **Using it:**
 - **X → Screen 2: On** turns screen 2 on (on its last channel) and gives it the focus. **Off** shows a
-  standby card there.
+  standby card there, which moves every few seconds so it can't burn into the CRT.
 - **Left / Right** move the focus between screen 1 and screen 2: a gold frame and "SCREEN 1/2" show
   where it is. The screen with the focus is the one you **hear**, and the one the remote, banner, X
   menu, zoom, channel list and guide act on. A small speaker on the banner marks it too.
