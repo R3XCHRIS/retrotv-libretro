@@ -1177,12 +1177,18 @@ static void screen_status(player_state st)
     last_save_async(cur);
 }
 
-/* screen 2 switched off: a standby card over dim static */
+/* screen 2 switched off: a standby card over dim static. The card jumps to
+ * a new place every STANDBY_MOVE seconds so it can't burn into the CRT. */
+#define STANDBY_MOVE 8.0
 static void draw_standby(osd_surface *s)
 {
   osd_static(s, &noise2);
   osd_fill(s, 0, 0, PLAYER_W, PLAYER_H, OSD_RGB(0, 0, 0), 150);
-  int x = 120, y = 170, w = 400, h = 120;
+  int w = 400, h = 120, margin = 24;
+  uint32_t k = (uint32_t)(t_now() / STANDBY_MOVE) * 2654435761u;   /* a fixed spot per period */
+  k ^= k >> 15;
+  int x = margin + (int)(k % (uint32_t)(PLAYER_W - w - 2 * margin + 1));
+  int y = margin + (int)((k >> 8) % (uint32_t)(PLAYER_H - h - 2 * margin + 1));
   osd_fill(s, x, y, w, h, TH->bg, 240);
   osd_fill(s, x, y, w, 3, TH->accent, 255);
   osd_text_shadow(s, x + (w - osd_text_width("SCREEN 2", 3)) / 2, y + 22, "SCREEN 2", 3, TH->title);
