@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # RetroTV for ReplayOS - give borrowed slots back: [avtest] to the A/V test
-# pattern and [pibench] (older installs) to PiBench.
-# Leaves <storage>/retrotv (core copy, playlist, backups) in place.
+# pattern, [nintendo_vb] to Virtual Boy and [pibench] (older installs) to PiBench.
+# Removes roms/nintendo_vb/RetroTV.vb and the Zaparoo launcher.
+# Leaves <storage>/retrotv (core copy, playlist, backups) and RetroTV's settings in place.
 set -euo pipefail
 [[ "${1:-}" == "NULL" ]] && shift
 
@@ -14,16 +15,33 @@ die() { echo "[retrotv] ERROR: $*" >&2; exit 1; }
 [[ -f $CFG ]] || die "$CFG not found"
 
 cp -p "$CFG" "$CFG.retrotv-uninstall.$(date +%Y%m%d-%H%M%S)"
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+STORAGE=$(cd "$HERE/../.." && pwd)                 # this script lives in <storage>/roms/_extra
+# Virtual Boy's own core, from cores.cfg as it was before RetroTV (else the known default)
+VBCORE=mednafen_vb_libretro.so
+if [[ -f $STORAGE/retrotv/backup/cores.cfg.original ]]; then
+  c=$(awk '/^\[/{s=($0=="[nintendo_vb]")} s && /^low[[:space:]]*=/{gsub(/.*= *"|".*/, ""); print; exit}' "$STORAGE/retrotv/backup/cores.cfg.original")
+  [[ -n $c && $c != retrotv_libretro.so ]] && VBCORE=$c
+fi
 tmp=$(mktemp)
 # each borrowed slot goes back to its own core: [avtest] -> avtest_libretro.so, [pibench] -> pibench_libretro.so
-awk '
+awk -v vbcore="$VBCORE" '
   /^\[/ { sec = substr($0, 2, length($0) - 2) }
   (sec == "avtest" || sec == "pibench") && /retrotv_libretro\.so/ { split($0, kv, "="); gsub(/[[:space:]]/, "", kv[1]); print kv[1] " = \"" sec "_libretro.so\""; next }
+  sec == "nintendo_vb" && /retrotv_libretro\.so/ { split($0, kv, "="); gsub(/[[:space:]]/, "", kv[1]); print kv[1] " = \"" vbcore "\""; next }
   { print }' "$CFG" >"$tmp"
 cat "$tmp" >"$CFG"
 rm -f "$tmp"
 grep -q retrotv_libretro "$CFG" && die "cores.cfg still mentions RetroTV - check $CFG"
-rm -f "$CORES/retrotv_libretro.so"
-say "[avtest] and [pibench] restored, core removed"
+rm -f "$CORES/retrotv_libretro.so" "$STORAGE/roms/nintendo_vb/RetroTV.vb" "$STORAGE/retrotv/slot.txt"
+rm -f /media/sd/retrotv/retrotv_launch.sh
+if [[ -f /media/sd/zaparoo/launchers/retrotv.toml ]] || grep -qs 'retrotv_launch' /media/sd/zaparoo/config.toml; then
+  rm -f /media/sd/zaparoo/launchers/retrotv.toml
+  Z=/media/sd/zaparoo/config.toml                                   # our allow_execute line
+  if grep -qs 'retrotv_launch' "$Z"; then grep -v 'retrotv_launch' "$Z" >"$Z.new" && cat "$Z.new" >"$Z"; rm -f "$Z.new"; fi
+  systemctl try-restart zaparoo.service >/dev/null 2>&1 || true
+  say "Zaparoo launcher removed"
+fi
+say "[avtest], [nintendo_vb] and [pibench] restored, core removed"
 say "restarting ReplayOS in 3 s"
 ( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &
