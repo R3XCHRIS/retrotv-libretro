@@ -106,9 +106,10 @@ Button names are the labels on an Xbox-style pad.
 | A | What's on (banner) |
 | B | Last channel |
 | Y | Zoom: letterboxed (Fit) or fill the screen (Zoom), remembered per channel |
-| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls |
+| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls (with two screens: Screen 2 on/off and Swap screens instead of 480/240p) |
 | Start | TV guide: Up/Down channel, Left/Right 30 minutes, A to watch, B to close |
-| Select | Channel list |
+| Select | Channel list: Up/Down one channel, Left/Right a page, A to watch, B to close |
+| Left / Right | With [two screens](#two-screens): move the focus (and the sound) to screen 1 / screen 2 |
 
 <p align="center">
   <img src="docs/screenshots/menu.png" width="266" alt="X menu">
@@ -134,6 +135,7 @@ watch: they apply immediately and last until you quit.
 | | Picture | Fit, Zoom (default for channels you haven't zoomed) |
 | | Remember zoom per channel | On, Off |
 | | Output | 640x480, 640x240 (240p) |
+| | Two screens (dual mode) | Off, On (needs ReplayOS Multi screen = Dual horizontal for RetroTV) |
 | | Refresh rate | Auto (50 Hz for 25/50 fps channels), 60 Hz, 50 Hz |
 | Sound | Volume leveller | Normal, Loud, Off |
 | | Tuning static sound | Normal, Quiet, Off |
@@ -164,6 +166,36 @@ by default because TV broadcasts look best at 480 lines.
   <img src="docs/screenshots/guide-240p.png" width="400" alt="Guide in 240p">
 </p>
 
+## Two screens
+
+With two CRTs on the Pi 5's two HDMI ports, RetroTV can play a channel on each.
+
+<p align="center">
+  <img src="docs/screenshots/two-screens.png" width="640" alt="Two screens: focus on screen 1, a second channel on screen 2">
+</p>
+
+**Setting up (once):**
+1. Connect **both** screens **before** switching the Pi on. ReplayOS sets up dual output at start; a
+   screen plugged in later makes the main CRT flash until a reboot.
+2. Open RetroTV, go to **System Settings → Picture → Two screens (dual mode) → On**, save, and quit RetroTV.
+3. Open RetroTV again. In the ReplayOS in-game menu, **Replay Options → Multi screen → Dual horizontal**,
+   then **Save system settings**, so only RetroTV uses it (your games keep their own setting). Quit
+   and open RetroTV once more.
+4. Don't use an `_autostart` file with this: ReplayOS 2.0.60 crashes at start-up when the autostarted
+   game has its own Dual horizontal setting.
+
+**Using it:**
+- **X → Screen 2: On** turns screen 2 on (on its last channel) and gives it the focus. **Off** shows a
+  standby card there, which moves every few seconds so it can't burn into the CRT.
+- **Left / Right** move the focus between screen 1 and screen 2: a gold frame and "SCREEN 1/2" show
+  where it is. The screen with the focus is the one you **hear**, and the one the remote, banner, X
+  menu, zoom, channel list and guide act on. A small speaker on the banner marks it too.
+- **X → Swap screens** swaps the two channels; you keep hearing the screen you were on.
+- Screen 2's channel and on/off are remembered. B (last channel) works per screen.
+- In dual mode the picture stays at 1280x480, 60 Hz: 50 Hz switching and 240p are off, because
+  ReplayOS's dual output flashes on a mode change. Sound comes from the main screen's HDMI.
+- Each screen is its own stream, so two channels use two connections to your server.
+
 ## Remote control
 
 While RetroTV is playing, it answers simple web requests on port **7474**.
@@ -191,6 +223,9 @@ Fit/Zoom and 480/240p, the same as the X menu on the TV.
 | `/settings` | sleep timer, audio track, volume leveller, picture and output, as JSON |
 | `/set?sleep=30&leveller=loud` | change settings: `sleep` (0, 15, 30, 60, 90), `audio` (track 1, 2, ...), `leveller` (off, normal, loud), `picture` (fit, zoom), `output` (480, 240) |
 | `/help` | this list, as text |
+| `screen=1` / `screen=2` | with two screens: add to `/tune`, `/up`, `/down`, `/last` to pick the screen (default: the focused one) |
+| `/focus?screen=2` | move the focus (and the sound) to screen 2 |
+| `/set?screen2=on` | turn screen 2 on or off |
 
 ```bash
 curl http://127.0.0.1:7474/tune?ch=36
