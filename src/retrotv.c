@@ -387,12 +387,14 @@ static void draw_banner(osd_surface *s, player_state st)
   if (opts.hints) osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  X MENU  START GUIDE", 1, TH->muted);
 }
 
+#define LIST_ROWS 12                   /* channels per page of the list (Left/Right page) */
 static void draw_list(osd_surface *s)
 {
-  int rows = 12, x = 40, y = 40, w = PLAYER_W - 80, rh = 30;
+  int rows = LIST_ROWS, x = 40, y = 40, w = PLAYER_W - 80, rh = 30;
   osd_fill(s, x, y, w, 36 + rows * rh, TH->bg, 230);
   osd_fill(s, x, y, w, 30, TH->accent, 255);
   osd_text(s, x + 12, y + 8, "CHANNEL LIST", 2, TH->on_accent);
+  osd_text(s, x + w - 12 - osd_text_width("LEFT/RIGHT PAGE", 1), y + 12, "LEFT/RIGHT PAGE", 1, TH->on_accent);
   size_t first = list_cursor >= (size_t)rows / 2 ? list_cursor - (size_t)rows / 2 : 0;
   if (chans.count > (size_t)rows && first + (size_t)rows > chans.count) first = chans.count - (size_t)rows;
   for (int r = 0; r < rows && first + (size_t)r < chans.count; r++) {
@@ -1626,6 +1628,8 @@ static void handle_input(void)
   if (list_open) {
     if (PRESSED(UP))   list_cursor = list_cursor ? list_cursor - 1 : chans.count - 1;
     if (PRESSED(DOWN)) list_cursor = (list_cursor + 1) % chans.count;
+    if (PRESSED(LEFT))  list_cursor = list_cursor > LIST_ROWS ? list_cursor - LIST_ROWS : 0;          /* a page up */
+    if (PRESSED(RIGHT)) list_cursor = list_cursor + LIST_ROWS < chans.count ? list_cursor + LIST_ROWS : chans.count - 1;
     if (FACE(PAD_A))   { list_open = 0; tune(list_cursor); }
     if (FACE(PAD_B) || PRESSED(SELECT)) list_open = 0;
     return;
