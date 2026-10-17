@@ -199,8 +199,15 @@ With two CRTs on the Pi 5's two HDMI ports, RetroTV can play a channel on each.
   menu, zoom, channel list and guide act on. A small speaker on the banner marks it too.
 - **X → Swap screens** swaps the two channels; you keep hearing the screen you were on.
 - Screen 2's channel and on/off are remembered. B (last channel) works per screen.
-- In dual mode the picture stays at 1280x480, 60 Hz: 50 Hz switching and 240p are off, because
-  ReplayOS's dual output flashes on a mode change. Sound comes from the main screen's HDMI.
+- In dual mode the picture is a fixed 1280x480 at 60 Hz, or **1280x240 (240p on both screens)**
+  with **System Settings → Picture → Output → 640x240**. Change it there and reopen RetroTV: it
+  isn't switched while running, and 50 Hz switching is off. ReplayOS then sends both CRTs a
+  progressive 240p mode instead of 480i, which some TVs and HDMI-to-SCART adapters hold better.
+  Sound comes from the main screen's HDMI.
+- If both screens play at half speed (smooth but stuttery, every channel), ReplayOS's two outputs
+  started out of step: reopen RetroTV. Each start is a new roll; RetroTV notes it in
+  `/tmp/retrotv.log` ("out of step"). Switching sizes while running made this a coin toss, which
+  is why the size is fixed.
 - With two screens connected, anything that changes the display mode can leave the main CRT
   flickering (and silent) until a reboot: plugging a screen in, a 50 Hz switch from RetroTV
   with two screens off, or ReplayOS crashing and restarting. A reboot clears it.
