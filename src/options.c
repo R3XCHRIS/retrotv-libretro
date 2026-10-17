@@ -30,6 +30,9 @@ static const opt_def OPTS[] = {
   { "retrotv_zoom_remember", "Remember zoom per channel",
     "Keep each channel's Fit/Zoom choice from the Y button.",
     "picture", "on", { { "on", "On" }, { "off", "Off" } } },
+  { "retrotv_dual", "Two screens (dual mode)",
+    "Two CRTs: a 1280x480 picture for ReplayOS Multi screen = Dual horizontal (set it for RetroTV only). Connect both screens before starting, and restart RetroTV after changing this. Keeps 60 Hz; 240p is off. Turn screen 2 on and off in the X menu.",
+    "picture", "off", { { "off", "Off" }, { "on", "On" } } },
   { "retrotv_resolution", "Output",
     "640x240 (240p) is progressive like old consoles on a CRT: no interlace flicker, half the vertical detail.",
     "picture", "480", { { "480", "640x480" }, { "240", "640x240 (240p)" } } },
@@ -108,6 +111,7 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   o->zoom_default = !strcmp(val("retrotv_zoom_default", get, ctx), "zoom");
   o->zoom_remember = !strcmp(val("retrotv_zoom_remember", get, ctx), "on");
   o->res240 = !strcmp(val("retrotv_resolution", get, ctx), "240");
+  o->dual = !strcmp(val("retrotv_dual", get, ctx), "on");
   const char *rc = val("retrotv_remote", get, ctx);
   o->remote = !strcmp(rc, "off") ? 0 : !strcmp(rc, "lan") ? 2 : 1;
 }

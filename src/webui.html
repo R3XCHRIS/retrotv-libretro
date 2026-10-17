@@ -42,6 +42,10 @@ button { font: 700 15px var(--mono); color: var(--text); background: var(--panel
 button:active { background: var(--sel); transform: translateY(1px); }
 button[aria-expanded="true"] { border-color: var(--gold); color: var(--gold); }
 
+.focus { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.focus[hidden] { display: none; }
+.focus button { padding: 10px 0; font-size: 13px; }
+.focus button.on { background: var(--gold); color: #0a1640; border-color: var(--gold); }
 .settings { margin-top: 10px; background: var(--panel); border-radius: 6px; padding: 4px 12px 10px; }
 .settings[hidden] { display: none; }
 .row { padding: 8px 0; border-bottom: 1px solid #111d4a; }
@@ -95,12 +99,17 @@ footer { color: var(--muted); font: 12px var(--mono); text-align: center; margin
     <button id="up" aria-label="Channel up">CH &#9650;</button>
     <button id="gear" aria-label="Settings" aria-expanded="false" aria-controls="settings">&#9881;</button>
   </div>
+  <div class="focus" id="focus" hidden>
+    <button id="f1" aria-label="Control screen 1">SCREEN 1</button>
+    <button id="f2" aria-label="Control screen 2">SCREEN 2</button>
+  </div>
   <div class="settings" id="settings" hidden>
     <div class="row"><div class="lbl">Sleep timer <em id="sleepleft"></em></div><div class="seg" id="s-sleep"></div></div>
     <div class="row"><div class="lbl">Audio track</div><div class="seg" id="s-audio"></div></div>
     <div class="row"><div class="lbl">Volume leveller</div><div class="seg" id="s-leveller"></div></div>
     <div class="row"><div class="lbl">Picture</div><div class="seg" id="s-picture"></div></div>
-    <div class="row"><div class="lbl">Output</div><div class="seg" id="s-output"></div></div>
+    <div class="row" id="r-output"><div class="lbl">Output</div><div class="seg" id="s-output"></div></div>
+    <div class="row" id="r-screen2" hidden><div class="lbl">Screen 2</div><div class="seg" id="s-screen2"></div></div>
   </div>
   <div class="msg" id="msg"></div>
 </header>
@@ -239,6 +248,9 @@ async function refresh() {
     $("nx").textContent = s.next ? "Next" + (nx ? " " + hhmm(nx.start) : "") + "  " + s.next : "";
     setBar($("bar"), p);
     fillArt($("nowart"), c || { ch: s.ch }, p);
+    const two = s.dual && s.screen2 && s.screen2.on;   /* focus switch while both screens play */
+    $("focus").hidden = !two;
+    if (two) { $("f1").className = s.focus === 1 ? "on" : ""; $("f2").className = s.focus === 2 ? "on" : ""; }
     if (s.ch !== current) { current = s.ch; render(); loadSettings(); }
     showMsg("");
   } catch (e) {
@@ -277,6 +289,9 @@ function renderSettings() {
   seg("s-leveller", [["off", "Off"], ["normal", "Normal"], ["loud", "Loud"]], s.leveller, "leveller");
   seg("s-picture", [["fit", "Fit"], ["zoom", "Zoom"]], s.picture, "picture");
   seg("s-output", [["480", "640x480"], ["240", "240p"]], s.output, "output");
+  $("r-output").hidden = !!s.dual;                  /* fixed picture size with two screens */
+  $("r-screen2").hidden = !s.dual;
+  if (s.dual) seg("s-screen2", [["off", "Off"], ["on", "On"]], s.screen2, "screen2");
 }
 
 async function loadSettings() {
@@ -297,6 +312,8 @@ $("gear").onclick = () => {
   $("gear").setAttribute("aria-expanded", open);
   if (open) loadSettings();
 };
+$("f1").onclick = () => tune("/focus?screen=1");
+$("f2").onclick = () => tune("/focus?screen=2");
 $("up").onclick = () => tune("/up");
 $("down").onclick = () => tune("/down");
 $("last").onclick = () => tune("/last");

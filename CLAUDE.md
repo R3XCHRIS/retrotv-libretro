@@ -164,6 +164,14 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   start Extras; use autostart. Its virtual gamepad is player 2 (RetroTV reads players 1-4),
   and menus need ReplayOS's "all players control the UI". Tags tune with
   `**http.get:http://127.0.0.1:7474/tune?ch=<n>` (RetroTV's remote control option).
+- **Two screens** (verified 2026-10-17 with two CRTs on the Pi's HDMI ports): ReplayOS "Multi screen"
+  (`video_monitor_multi_mode`, or per system/game `replay_video_monitor_multi_mode`) = Dual
+  horizontal (2) splits one core picture: left half → screen 1, right half → screen 2. Rules learned
+  the hard way: both screens connected at boot; **never change geometry or refresh while running**
+  (SET_SYSTEM_AV_INFO → page flips fail, main CRT flashes until reboot); Dual smart applies only to
+  dual-screen arcade games; per-game Dual horizontal + `_autostart` = ReplayOS segfault at start-up.
+  RetroTV's `retrotv_dual` option (read at load) gives a fixed 1280x480 at 60 Hz: the globals are the
+  focused screen, `other` the second; `exchange()` swaps them (see the comment in `src/retrotv.c`).
 - The long-term fix is an official "user cores" hook from the ReplayOS author.
 
 ## Roadmap and design

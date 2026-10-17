@@ -94,13 +94,18 @@ static int parse_set(const char *q, size_t qlen, remote_cmd *c)
     if (c->output < 0) return -1;
     any = 1;
   }
+  if (query_get(q, qlen, "screen2", v, sizeof(v))) {
+    c->screen2 = !strcasecmp(v, "on") ? 1 : !strcasecmp(v, "off") ? 0 : -2;
+    if (c->screen2 < 0) return -1;
+    any = 1;
+  }
   return any ? 0 : -1;
 }
 
 void remote_parse(const char *req, remote_cmd *c)
 {
   memset(c, 0, sizeof(*c));
-  c->sleep = c->audio = c->leveller = c->picture = c->output = -1;
+  c->sleep = c->audio = c->leveller = c->picture = c->output = c->screen2 = -1;
   const char *sp = strchr(req, ' ');
   if (!sp) { c->kind = RC_BAD; return; }
   size_t ml = (size_t)(sp - req);
@@ -119,6 +124,7 @@ void remote_parse(const char *req, remote_cmd *c)
   else if (IS("/channels")) c->kind = RC_CHANNELS;
   else if (IS("/settings")) c->kind = RC_SETTINGS;
   else if (IS("/set")) c->kind = parse_set(q, qlen, c) ? RC_BAD : RC_SET;
+  else if (IS("/focus")) c->kind = RC_FOCUS;
   else if (IS("/up")) c->kind = RC_UP;
   else if (IS("/down")) c->kind = RC_DOWN;
   else if (IS("/last")) c->kind = RC_LAST;
@@ -128,6 +134,14 @@ void remote_parse(const char *req, remote_cmd *c)
     c->kind = (a && *c->ch) || (b && *c->name) ? RC_TUNE : RC_BAD;
   } else c->kind = RC_NONE;
 #undef IS
+  if (c->kind == RC_TUNE || c->kind == RC_UP || c->kind == RC_DOWN || c->kind == RC_LAST || c->kind == RC_FOCUS) {
+    char v[8];
+    if (query_get(q, qlen, "screen", v, sizeof(v))) {
+      if (!strcmp(v, "1")) c->screen = 1;
+      else if (!strcmp(v, "2")) c->screen = 2;
+      else c->kind = RC_BAD;
+    } else if (c->kind == RC_FOCUS) c->kind = RC_BAD;    /* /focus needs a screen */
+  }
 }
 
 /* lowercase letters and digits only: "Star Trek: TNG" -> "startrektng" */
