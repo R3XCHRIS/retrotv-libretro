@@ -82,6 +82,22 @@ int main(void)
   CHECK(c.kind == RC_HELP);
   remote_parse("GET /channels?x=1 HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_CHANNELS);
+  remote_parse("GET /tune?ch=36&screen=2 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_TUNE && c.screen == 2 && !strcmp(c.ch, "36"));
+  remote_parse("GET /tune?ch=36 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_TUNE && c.screen == 0);              /* the focused screen */
+  remote_parse("GET /up?screen=1 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_UP && c.screen == 1);
+  remote_parse("GET /down?screen=3 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
+  remote_parse("GET /focus?screen=2 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_FOCUS && c.screen == 2);
+  remote_parse("GET /focus HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
+  remote_parse("GET /set?screen2=on HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SET && c.screen2 == 1 && c.sleep == -1);
+  remote_parse("GET /set?screen2=maybe HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
   remote_parse("GET /settings HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_SETTINGS);
   remote_parse("GET /set?sleep=30&audio=2&leveller=Loud&picture=zoom&output=240 HTTP/1.1\r\n", &c);

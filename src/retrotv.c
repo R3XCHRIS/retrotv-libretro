@@ -30,7 +30,7 @@
 #include "remote.h"
 #include "webui.h"
 
-#define RETROTV_VERSION "0.2.4"
+#define RETROTV_VERSION "0.2.5"
 /* Output refresh: 60 Hz, or 50 Hz while a 25/50 fps (PAL) channel plays so
  * every frame is held equally long. Audio frames per run follow the rate. */
 #define AFRAMES_MAX ((size_t)(PLAYER_RATE / 50))   /* 960 stereo frames per run at 50 Hz */
@@ -96,7 +96,8 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
-enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Output in single mode, Screen 2 / Swap in dual mode */
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
 static int sleep_warned;             /* "SLEEP 1" shown */
@@ -110,6 +111,35 @@ static guide_view gv;
 static size_t list_cursor;
 static uint16_t pad_prev;
 static int logged_playing, logged_error, logged_attempt;
+
+/* Two screens (dual mode): one 1280x480 picture that ReplayOS's "Dual
+ * horizontal" splits across two CRTs. The globals above (pl, cur, prev,
+ * zoom, banner, logs, last-channel file) are the screen with the focus: the
+ * remote, menus, guide and sound act on it. `other` holds the second
+ * screen; exchange() swaps them. The picture size never changes while
+ * running (ReplayOS's dual output flashes on a mode change). */
+typedef struct {
+  player *pl;
+  size_t cur, prev;
+  int zoom;
+  double banner_until, played_at;
+  int logged_playing, logged_error, logged_attempt;
+  int saved_idx;
+  char last_path[1100];
+} screen_state;
+static int dual;                       /* dual mode this session (opts.dual at load) */
+static int screen2_on;                 /* screen 2 playing; off = standby card */
+static int focus_side;                 /* physical screen with the focus: 0 = screen 1, 1 = screen 2 */
+static int gside;                      /* physical screen whose state is in the globals right now */
+static screen_state other;             /* the screen without the focus */
+static uint32_t fb2[PLAYER_W * PLAYER_H];              /* the other screen's picture */
+static uint32_t dualfb[2 * PLAYER_W * PLAYER_H];
+static int16_t mutebuf[(PLAYER_RATE / 50) * 2];        /* the other screen's audio, read and dropped */
+static double focus_flash_until;
+static uint32_t noise2 = 777;
+static char dual_path[1100];           /* remembers whether screen 2 is on */
+static int dual_save;                  /* write it when the saver is free */
+static int dual_changed_logged;
 static char help_reason[160];      /* why no channels loaded (for the log) */
 static ob_kind ob_why = OB_NO_FILE; /* ... and for the setup screen */
 static char ob_err[160];           /* FFmpeg's error text for OB_FETCH */
@@ -125,9 +155,11 @@ static char state_dir[1024];       /* where the core keeps its small files */
 /* Remote control: the server thread resolves a request and leaves it here;
  * retro_run applies it. It reads chans (fixed while it runs) and the two
  * published values below, never the UI state. */
-enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST };
-static atomic_int remote_req;          /* kind | channel index << 3, 0 = nothing */
-static atomic_int pub_cur = -1;        /* channel on screen, for /status */
+enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST, RQ_FOCUS };
+static atomic_int remote_req;          /* kind | screen << 3 (0 focused, 1, 2) | channel index << 5; 0 = nothing */
+static atomic_int pub_cur = -1;        /* channel on the focused screen, for /status */
+static atomic_int pub_dual, pub_s2on, pub_focus;       /* two screens: mode, screen 2 on, focused screen (0/1) */
+static atomic_int pub_cur2 = -1, pub_state2;           /* the other screen's channel and state */
 enum { PS_TUNING, PS_PLAYING, PS_NO_SIGNAL, PS_OFF, PS_TESTCARD, PS_NO_CHANNELS };
 static atomic_int pub_state = PS_NO_CHANNELS;
 static int remote_mode;                /* what the server runs as: opts.remote values */
@@ -171,7 +203,18 @@ static double t_now(void) { return t_clock; }
 
 /* the surface to draw on: logical 640x480, half the rows in 240p */
 static osd_surface screen(void) { return (osd_surface){ fb, PLAYER_W, PLAYER_H, PLAYER_W, res240 }; }
-static void present(void) { video_cb(fb, PLAYER_W, res240 ? PLAYER_H / 2 : PLAYER_H, PLAYER_W * sizeof(uint32_t)); }
+static void present(void)
+{
+  if (!dual) { video_cb(fb, PLAYER_W, res240 ? PLAYER_H / 2 : PLAYER_H, PLAYER_W * sizeof(uint32_t)); return; }
+  const uint32_t *l = focus_side ? fb2 : fb, *r = focus_side ? fb : fb2;   /* screen 1 is the left half */
+  for (int y = 0; y < PLAYER_H; y++) {
+    memcpy(dualfb + (size_t)y * 2 * PLAYER_W, l + (size_t)y * PLAYER_W, PLAYER_W * sizeof(uint32_t));
+    memcpy(dualfb + (size_t)y * 2 * PLAYER_W + PLAYER_W, r + (size_t)y * PLAYER_W, PLAYER_W * sizeof(uint32_t));
+  }
+  video_cb(dualfb, 2 * PLAYER_W, PLAYER_H, 2 * PLAYER_W * sizeof(uint32_t));
+}
+/* "screen 2: " in log lines while two screens play */
+static const char *stag(void) { return dual && screen2_on ? (gside ? "screen 2: " : "screen 1: ") : ""; }
 
 /* 240p: average each pair of lines of the 640x480 picture into one */
 static void halve_lines(const uint32_t *src, uint32_t *dst)
@@ -208,9 +251,11 @@ static void tune(size_t idx)
   banner_until = t_now() + opts.banner_secs;
   logged_playing = logged_error = 0;
   logged_attempt = 1;
-  logf_(RETRO_LOG_INFO, "tune ch %s \"%s\"", chans.ch[cur].number, chans.ch[cur].name);
-  loud_reset(&loud);
-  if (opts.blip) blip_left = BLIP_FRAMES;
+  logf_(RETRO_LOG_INFO, "%stune ch %s \"%s\"", stag(), chans.ch[cur].number, chans.ch[cur].name);
+  if (gside == focus_side) {                         /* the screen you hear */
+    loud_reset(&loud);
+    if (opts.blip) blip_left = BLIP_FRAMES;
+  }
   int zr = opts.zoom_remember ? chanpref_get(&zprefs, &chans.ch[cur]) : -1;
   zoom = zr >= 0 ? zr : opts.zoom_default;
   player_set_zoom(pl, zoom);
@@ -278,6 +323,14 @@ static void draw_banner(osd_surface *s, player_state st)
   char clk[12];
   epg_clock(tt, opts.clock24, 1, clk, sizeof(clk));
   osd_text_shadow(s, bx + bw - osd_text_width(clk, 2) - 14, by + 18, clk, 2, TH->text);
+  if (dual && screen2_on && gside == focus_side) {   /* the screen you hear: a little speaker */
+    int sx = bx + bw - osd_text_width(clk, 2) - 14 - 34, sy = by + 18;
+    osd_fill(s, sx, sy + 5, 5, 6, TH->accent, 255);
+    osd_fill(s, sx + 5, sy + 3, 3, 10, TH->accent, 255);
+    osd_fill(s, sx + 8, sy + 1, 3, 14, TH->accent, 255);
+    osd_fill(s, sx + 14, sy + 4, 2, 8, TH->accent, 255);
+    osd_fill(s, sx + 18, sy + 1, 2, 14, TH->accent, 255);
+  }
 
   switch (st) {
   case PLAYER_CONNECTING:
@@ -334,12 +387,14 @@ static void draw_banner(osd_surface *s, player_state st)
   if (opts.hints) osd_text(s, nx, y + 16, "A INFO  B LAST  Y ZOOM  X MENU  START GUIDE", 1, TH->muted);
 }
 
+#define LIST_ROWS 12                   /* channels per page of the list (Left/Right page) */
 static void draw_list(osd_surface *s)
 {
-  int rows = 12, x = 40, y = 40, w = PLAYER_W - 80, rh = 30;
+  int rows = LIST_ROWS, x = 40, y = 40, w = PLAYER_W - 80, rh = 30;
   osd_fill(s, x, y, w, 36 + rows * rh, TH->bg, 230);
   osd_fill(s, x, y, w, 30, TH->accent, 255);
   osd_text(s, x + 12, y + 8, "CHANNEL LIST", 2, TH->on_accent);
+  osd_text(s, x + w - 12 - osd_text_width("LEFT/RIGHT PAGE", 1), y + 12, "LEFT/RIGHT PAGE", 1, TH->on_accent);
   size_t first = list_cursor >= (size_t)rows / 2 ? list_cursor - (size_t)rows / 2 : 0;
   if (chans.count > (size_t)rows && first + (size_t)rows > chans.count) first = chans.count - (size_t)rows;
   for (int r = 0; r < rows && first + (size_t)r < chans.count; r++) {
@@ -409,14 +464,16 @@ static void draw_welcome(osd_surface *s)
   static const char *rows[][2] = {
     { "UP / DOWN", "change channel" }, { "A", "what's on (banner)" }, { "B", "last channel" },
     { "Y", "zoom / fit picture" }, { "X", "menu: sleep, audio, leveller, test card" }, { "START", "TV guide" },
-    { "SELECT", "channel list" },
+    { "SELECT", "channel list (left/right: a page)" },
+    { "LEFT/RIGHT", "screen 1 / screen 2 (sound follows)" },
   };
-  for (int i = 0; i < 7; i++) {
+  int n = dual ? 8 : 7, more = dual ? 22 : 0;        /* the last row only with two screens */
+  for (int i = 0; i < n; i++) {
     osd_text_shadow(s, x + 24, y + 52 + i * 30, rows[i][0], 2, TH->accent);
     osd_text(s, x + 200, y + 56 + i * 30, rows[i][1], 1, TH->text);
   }
-  osd_text(s, x + 24, y + 270, "Settings: ReplayOS menu > System Settings", 1, TH->sub);
-  osd_text_shadow(s, x + 24, y + 298, "Press A to start watching", 2, TH->text);
+  osd_text(s, x + 24, y + 270 + more, "Settings: ReplayOS menu > System Settings", 1, TH->sub);
+  osd_text_shadow(s, x + 24, y + 298 + more / 2 + 4, "Press A to start watching", 2, TH->text);
 }
 
 /* ---------- playlist lookup ---------- */
@@ -762,6 +819,8 @@ static void send_audio(void)
 /* ---------- core options ---------- */
 
 static void follow_refresh(double fps);
+static void exchange(void);
+static void show_toast(const char *t);
 static void remote_update(void);
 
 static int saved_leveller = -1, saved_res240 = -1;  /* last values from System Settings */
@@ -776,6 +835,8 @@ static void apply_options(void)
   else saved_leveller = opts.leveller;
   if (saved_res240 >= 0 && opts.res240 == saved_res240) opts.res240 = r240;
   else saved_res240 = opts.res240;
+  if (!pl) dual = opts.dual;                         /* dual mode is fixed for the session */
+  if (dual) opts.res240 = 0;
   if (!pl) res240 = opts.res240;                     /* at load the frontend asks for the size next */
   loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
   theme_set(opts.theme);
@@ -786,6 +847,7 @@ static void apply_options(void)
 /* 480 <-> 240p while running (only from retro_run) */
 static void set_output(int r240)
 {
+  if (dual) return;                                  /* fixed 1280x480 in dual mode */
   if (r240 == res240) return;
   int was = res240;
   res240 = r240;
@@ -806,6 +868,11 @@ static void check_options(void)
   bool upd = false;
   if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &upd) && upd) {
     apply_options();
+    if (opts.dual != dual && !dual_changed_logged) {
+      show_toast("RESTART RETROTV");
+      logf_(RETRO_LOG_INFO, "two screens %s: applies when RetroTV restarts", opts.dual ? "on" : "off");
+      dual_changed_logged = 1;
+    }
     follow_refresh(0);                               /* a refresh lock applies right away */
     set_output(opts.res240);
     remote_update();
@@ -831,6 +898,7 @@ static void show_toast(const char *t)
 /* Ask the frontend for 50 Hz on 25/50 fps channels and 60 Hz otherwise. */
 static void follow_refresh(double fps)
 {
+  if (dual) { if (fps > 0) stream_fps = fps; return; }   /* fixed 60 Hz: a mode change makes dual output flash */
   if (refresh_refused) return;
   if (fps > 0) stream_fps = fps;
   double want = opts.refresh ? opts.refresh                                   /* locked */
@@ -914,17 +982,31 @@ static void step_leveller(int dir)
   set_leveller(order[(i + dir + 3) % 3]);
 }
 
+static void qm_build(void)
+{
+  qm_n = 0;
+  for (int r = 0; r < QM_ROWS; r++) {
+    if (r == QM_OUTPUT && dual) continue;                       /* a size change would break dual output */
+    if (r == QM_SCREEN2 && !dual) continue;
+    if (r == QM_SWAP && !(dual && screen2_on)) continue;
+    qm_rows[qm_n++] = r;
+  }
+  if (qm_sel >= qm_n) qm_sel = qm_n - 1;
+}
+
 static void draw_qmenu(osd_surface *s)
 {
-  int x = 40, y = 92, w = 330, rh = 34, h = 62 + QM_ROWS * rh;   /* below the OSD message */
+  qm_build();
+  int x = 40, y = 92, w = 330, rh = 34, h = 62 + qm_n * rh;     /* below the OSD message */
   osd_fill(s, x, y, w, h, TH->bg, 235);
   osd_fill(s, x, y, w, 30, TH->accent, 255);
   osd_text(s, x + 12, y + 8, "MENU", 2, TH->on_accent);
   player_info in;
   player_get_info(pl, &in);
-  for (int r = 0; r < QM_ROWS; r++) {
+  for (int i = 0; i < qm_n; i++) {
+    int r = qm_rows[i];
     char val[32] = "";
-    int ry = y + 38 + r * rh, dim = 0;
+    int ry = y + 38 + i * rh, dim = 0;
     const char *label = "";
     switch (r) {
     case QM_SLEEP:
@@ -939,15 +1021,17 @@ static void draw_qmenu(osd_surface *s)
     case QM_LEVEL: label = "Leveller"; snprintf(val, sizeof(val), "%s", LEVELLER_NAMES[opts.leveller]); break;
     case QM_ZOOM: label = "Picture"; snprintf(val, sizeof(val), "%s", zoom ? "Zoom" : "Fit"); break;
     case QM_OUTPUT: label = "Output"; snprintf(val, sizeof(val), "%s", res240 ? "240p" : "480"); break;
+    case QM_SCREEN2: label = "Screen 2"; snprintf(val, sizeof(val), "%s", screen2_on ? "On" : "Off"); break;
+    case QM_SWAP: label = "Swap screens"; break;
     case QM_TESTCARD: label = "Test card"; break;
     case QM_HELP: label = "Show controls"; break;
     case QM_CLOSE: label = "Close"; break;
     }
-    if (r == qm_sel) osd_fill(s, x + 4, ry - 4, w - 8, rh - 2, TH->cell_sel, 255);
+    if (i == qm_sel) osd_fill(s, x + 4, ry - 4, w - 8, rh - 2, TH->cell_sel, 255);
     osd_text_shadow(s, x + 14, ry + 2, label, 2, dim ? TH->muted : TH->text);
     if (*val) {
       char v[40];
-      snprintf(v, sizeof(v), r == qm_sel && !dim ? "< %s >" : "%s", val);
+      snprintf(v, sizeof(v), i == qm_sel && !dim ? "< %s >" : "%s", val);
       osd_text(s, x + w - 14 - osd_text_width(v, 1), ry + 6, v, 1, dim ? TH->muted : TH->title);
     }
   }
@@ -966,6 +1050,7 @@ static void sleep_tick(void)
     sleep_min = 0;
     qm_open = guide_open = list_open = 0;
     player_close(pl);
+    if (dual && screen2_on) { exchange(); player_close(pl); exchange(); }
     logf_(RETRO_LOG_INFO, "sleep timer: switched off");
   }
 }
@@ -976,6 +1061,181 @@ static double sleep_level(void)
   if (!sleep_at) return 1.0;
   double left = sleep_at - t_now();
   return left >= SLEEP_FADE ? 1.0 : left <= 0 ? 0.0 : left / SLEEP_FADE;
+}
+
+/* ---------- two screens ---------- */
+
+/* swap the globals with `other`; keep_paths leaves each last-channel file
+ * with its physical screen (used by Swap screens) */
+static void swap_state(int keep_paths)
+{
+  screen_state g = { pl, cur, prev, zoom, banner_until, played_at, logged_playing, logged_error, logged_attempt, saved_idx, "" };
+  memcpy(g.last_path, last_path, sizeof(g.last_path));
+  pl = other.pl; cur = other.cur; prev = other.prev; zoom = other.zoom;
+  banner_until = other.banner_until; played_at = other.played_at;
+  logged_playing = other.logged_playing; logged_error = other.logged_error; logged_attempt = other.logged_attempt;
+  saved_idx = other.saved_idx;
+  memcpy(last_path, other.last_path, sizeof(last_path));
+  other = g;
+  if (keep_paths) {                                  /* the files stay with their screens */
+    char t[sizeof(last_path)];
+    memcpy(t, last_path, sizeof(t));
+    memcpy(last_path, other.last_path, sizeof(last_path));
+    memcpy(other.last_path, t, sizeof(t));
+  }
+}
+/* work on the other screen in place (pair every call) */
+static void exchange(void) { swap_state(0); gside ^= 1; }
+
+static void dual_note_save(void) { dual_save = 1; }
+
+/* move the focus (remote, menus, guide, sound) to physical screen side */
+static void set_focus(int side)
+{
+  if (!dual || side == focus_side || (side == 1 && !screen2_on)) return;
+  qm_open = guide_open = list_open = 0;
+  exchange();
+  focus_side = gside;
+  loud_reset(&loud);                                 /* the other channel's loudness */
+  focus_flash_until = t_now() + 1.5;
+  banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);
+  logf_(RETRO_LOG_INFO, "focus: screen %d (ch %s)", focus_side + 1, chans.count ? chans.ch[cur].number : "-");
+}
+
+/* screen 2 on: tune its last channel and give it the focus; off: standby */
+static void set_screen2(int on)
+{
+  if (!dual || !chans.count || on == screen2_on) return;
+  if (on) {
+    screen2_on = 1;
+    exchange();                                      /* screen 2's state into the globals... */
+    focus_side = gside;                              /* ...and it keeps the focus */
+    tune(cur);
+    loud_reset(&loud);
+    focus_flash_until = t_now() + 1.5;
+    logf_(RETRO_LOG_INFO, "screen 2 on (ch %s)", chans.ch[cur].number);
+  } else {
+    set_focus(0);
+    exchange();
+    log_stats();
+    player_close(pl);
+    exchange();
+    screen2_on = 0;
+    show_toast("SCREEN 2 OFF");
+    logf_(RETRO_LOG_INFO, "screen 2 off");
+  }
+  qm_open = 0;
+  dual_note_save();
+}
+
+/* Swap screens: the two channels change places; the focus (and sound) stays
+ * on the same physical screen, so you now hear the channel that moved there */
+static void swap_screens(void)
+{
+  if (!dual || !screen2_on) return;
+  swap_state(1);
+  saved_idx = other.saved_idx = -1;                  /* both files now hold the wrong channel */
+  played_at = other.played_at = t_now() - REMEMBER_AFTER;
+  loud_reset(&loud);
+  banner_until = other.banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);
+  focus_flash_until = t_now() + 1.5;
+  qm_open = 0;
+  show_toast("SWAPPED");
+  logf_(RETRO_LOG_INFO, "swap screens: screen 1 ch %s, screen 2 ch %s",
+        chans.ch[focus_side ? other.cur : cur].number, chans.ch[focus_side ? cur : other.cur].number);
+}
+
+/* per-frame bookkeeping for the screen in the globals: logs, refresh, last channel */
+static void screen_status(player_state st)
+{
+  char why[160];
+  int att = player_attempt(pl, why, sizeof(why));
+  if (att > logged_attempt) {
+    logf_(RETRO_LOG_WARN, "%sch %s attempt %d failed (%s), retrying", stag(), chans.ch[cur].number, att - 1, why);
+    logged_attempt = att;
+  }
+  if (st == PLAYER_ERROR && !logged_error) {
+    logf_(RETRO_LOG_WARN, "%sch %s NO SIGNAL after %.1fs: %s", stag(), chans.ch[cur].number, player_tuning_seconds(pl), player_error(pl));
+    logged_error = 1;
+  }
+  if (st == PLAYER_PLAYING && !logged_playing) {
+    player_info in;
+    player_get_info(pl, &in);
+    logf_(RETRO_LOG_INFO, "%splaying ch %s after %.2fs (%dx%d %s %.2ffps %s%s)", stag(), chans.ch[cur].number,
+          player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
+    logged_playing = 1;
+    played_at = t_now();
+    banner_until = t_now() + opts.banner_secs;   /* show what came on */
+    if (gside == focus_side) follow_refresh(in.fps);
+  }
+  if (st == PLAYER_PLAYING && logged_playing && stream_fps <= 0 && gside == focus_side) {   /* frame rate measured after it started */
+    player_info in;
+    player_get_info(pl, &in);
+    if (in.fps > 0) {
+      logf_(RETRO_LOG_INFO, "%sch %s frame rate %.3f fps (%dx%d)", stag(), chans.ch[cur].number, in.fps, in.width, in.height);
+      follow_refresh(in.fps);
+      stream_fps = in.fps;                           /* once, even if the frontend refused a change */
+    }
+  }
+  if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
+    last_save_async(cur);
+}
+
+/* screen 2 switched off: a standby card over dim static. The card jumps to
+ * a new place every STANDBY_MOVE seconds so it can't burn into the CRT. */
+#define STANDBY_MOVE 8.0
+static void draw_standby(osd_surface *s)
+{
+  osd_static(s, &noise2);
+  osd_fill(s, 0, 0, PLAYER_W, PLAYER_H, OSD_RGB(0, 0, 0), 150);
+  int w = 400, h = 120, margin = 24;
+  uint32_t k = (uint32_t)(t_now() / STANDBY_MOVE) * 2654435761u;   /* a fixed spot per period */
+  k ^= k >> 15;
+  int x = margin + (int)(k % (uint32_t)(PLAYER_W - w - 2 * margin + 1));
+  int y = margin + (int)((k >> 8) % (uint32_t)(PLAYER_H - h - 2 * margin + 1));
+  osd_fill(s, x, y, w, h, TH->bg, 240);
+  osd_fill(s, x, y, w, 3, TH->accent, 255);
+  osd_text_shadow(s, x + (w - osd_text_width("SCREEN 2", 3)) / 2, y + 22, "SCREEN 2", 3, TH->title);
+  osd_text_shadow(s, x + (w - osd_text_width("STANDBY", 2)) / 2, y + 56, "STANDBY", 2, TH->text);
+  const char *hint = "X MENU > SCREEN 2 TO TURN ON";
+  osd_text(s, x + (w - osd_text_width(hint, 1)) / 2, y + 92, hint, 1, TH->muted);
+}
+
+/* a gold frame and "SCREEN n" for a moment on the screen that just got the focus */
+static void draw_focus_flash(osd_surface *s)
+{
+  uint32_t c = TH->accent;
+  osd_fill(s, 0, 0, PLAYER_W, 6, c, 255);
+  osd_fill(s, 0, PLAYER_H - 6, PLAYER_W, 6, c, 255);
+  osd_fill(s, 0, 0, 6, PLAYER_H, c, 255);
+  osd_fill(s, PLAYER_W - 6, 0, 6, PLAYER_H, c, 255);
+  char t[16];
+  snprintf(t, sizeof(t), "SCREEN %d", focus_side + 1);
+  int w = osd_text_width(t, 3) + 32, x = PLAYER_W - w - 24;
+  osd_fill(s, x, 24, w, 40, TH->bg, 235);
+  osd_fill(s, x, 24, w, 3, c, 255);
+  osd_text_shadow(s, x + 16, 34, t, 3, TH->title);
+}
+
+/* the screen without focus: read its audio (it is that stream's clock),
+ * keep its logs and last channel, draw its picture into fb2 */
+static void other_frame(void)
+{
+  if (!dual) return;
+  osd_surface s2 = { fb2, PLAYER_W, PLAYER_H, PLAYER_W, 0 };
+  if (!screen2_on || !chans.count || !other.pl) { draw_standby(&s2); return; }
+  exchange();
+  player_audio(pl, mutebuf, aframes(), 1.0 / fps_out);
+  player_state st = player_get_state(pl);
+  screen_status(st);
+  int have = player_video(pl, fb2);
+  if (st == PLAYER_ERROR) draw_no_signal(&s2);
+  else if (st != PLAYER_PLAYING && !have) {
+    if (opts.static_vhs) osd_static_vhs(&s2, &noise2, (unsigned)frame_no);
+    else osd_static(&s2, &noise2);
+  }
+  if (st != PLAYER_PLAYING || t_now() < banner_until) draw_banner(&s2, st);
+  exchange();
 }
 
 /* ---------- remote control ---------- */
@@ -989,7 +1249,9 @@ static const char REMOTE_HELP[] =
   "  /status               what's on (JSON)\n"
   "  /channels             every channel with Now/Next, logos and posters (JSON)\n"
   "  /settings             sleep timer, audio track, leveller, picture, output (JSON)\n"
-  "  /set?sleep=30&audio=2&leveller=loud&picture=zoom&output=240   change any of them\n";
+  "  /set?sleep=30&audio=2&leveller=loud&picture=zoom&output=240   change any of them\n"
+  "  two screens: add screen=1 or screen=2 to /tune /up /down /last;\n"
+  "  /focus?screen=2 moves the focus (and sound); /set?screen2=on|off\n";
 
 /* "now":{"title":..,"start":..,"stop":..},"next":{..} for one channel (guide_mu held) */
 static void remote_now_next(remote_buf *b, const m3u_channel *ch, time_t t)
@@ -1021,6 +1283,16 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
   default: break;
   }
   if (!chans.count) { remote_puts(b, "{\"ok\":false,\"error\":\"no channels loaded\"}"); return 503; }
+  if (c->screen == 2 && !(atomic_load(&pub_dual) && atomic_load(&pub_s2on))) {
+    remote_puts(b, atomic_load(&pub_dual) ? "{\"ok\":false,\"error\":\"screen 2 is off: /set?screen2=on\"}"
+                                          : "{\"ok\":false,\"error\":\"two screens are off (System Settings)\"}");
+    return 409;
+  }
+  if (c->kind == RC_FOCUS) {
+    atomic_store(&remote_req, RQ_FOCUS | c->screen << 3);
+    remote_puts(b, "{\"ok\":true}");
+    return 200;
+  }
   int idx = atomic_load(&pub_cur);
   if (idx < 0 || (size_t)idx >= chans.count) idx = 0;
   time_t t = time(NULL);
@@ -1059,11 +1331,16 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
       if (i) remote_puts(b, ",");
       remote_json(b, v.audio_lang[i]);
     }
-    remote_printf(b, "],\"leveller\":\"%s\",\"picture\":\"%s\",\"output\":\"%s\"}",
-                  LEV[v.leveller >= 0 && v.leveller <= 2 ? v.leveller : 1], v.zoom ? "zoom" : "fit", v.res240 ? "240" : "480");
+    remote_printf(b, "],\"leveller\":\"%s\",\"picture\":\"%s\",\"output\":\"%s\",\"dual\":%s,\"screen2\":\"%s\",\"focus\":%d}",
+                  LEV[v.leveller >= 0 && v.leveller <= 2 ? v.leveller : 1], v.zoom ? "zoom" : "fit", v.res240 ? "240" : "480",
+                  atomic_load(&pub_dual) ? "true" : "false", atomic_load(&pub_s2on) ? "on" : "off", atomic_load(&pub_focus) + 1);
     return 200;
   }
   case RC_SET: {
+    if (c->screen2 >= 0 && !atomic_load(&pub_dual)) {
+      remote_puts(b, "{\"ok\":false,\"error\":\"two screens are off (System Settings)\"}");
+      return 409;
+    }
     int ok_sleep = c->sleep < 0;
     for (size_t i = 0; !ok_sleep && i < sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0]); i++) ok_sleep = SLEEP_STEPS[i] == c->sleep;
     if (!ok_sleep) {
@@ -1087,6 +1364,7 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
       if (c->leveller >= 0) rset.leveller = c->leveller;
       if (c->picture >= 0) rset.picture = c->picture;
       if (c->output >= 0) rset.output = c->output;
+      if (c->screen2 >= 0) rset.screen2 = c->screen2;
     }
     pthread_mutex_unlock(&remote_mu);
     remote_puts(b, "{\"ok\":true}");
@@ -1100,7 +1378,7 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
       remote_puts(b, "}");
       return 404;
     }
-    atomic_store(&remote_req, RQ_TUNE | idx << 3);
+    atomic_store(&remote_req, RQ_TUNE | c->screen << 3 | idx << 5);
     remote_puts(b, "{\"ok\":true,\"ch\":");
     remote_json(b, chans.ch[idx].number);
     remote_puts(b, ",\"name\":");
@@ -1108,7 +1386,7 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     remote_puts(b, "}");
     return 200;
   case RC_UP: case RC_DOWN: case RC_LAST:
-    atomic_store(&remote_req, c->kind == RC_UP ? RQ_UP : c->kind == RC_DOWN ? RQ_DOWN : RQ_LAST);
+    atomic_store(&remote_req, (c->kind == RC_UP ? RQ_UP : c->kind == RC_DOWN ? RQ_DOWN : RQ_LAST) | c->screen << 3);
     remote_puts(b, "{\"ok\":true}");                 /* the channel is known once applied: see /status */
     return 200;
   default: {                                         /* RC_STATUS */
@@ -1126,7 +1404,20 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     remote_puts(b, ",\"next\":");
     remote_json(b, px ? px->title : NULL);
     pthread_mutex_unlock(&guide_mu);
-    remote_printf(b, ",\"channels\":%zu}", chans.count);
+    remote_printf(b, ",\"channels\":%zu", chans.count);
+    if (atomic_load(&pub_dual)) {
+      int s2on = atomic_load(&pub_s2on), c2 = atomic_load(&pub_cur2), st2 = atomic_load(&pub_state2);
+      remote_printf(b, ",\"dual\":true,\"focus\":%d,\"screen2\":{\"on\":%s", atomic_load(&pub_focus) + 1, s2on ? "true" : "false");
+      if (s2on && c2 >= 0 && (size_t)c2 < chans.count) {   /* the screen without focus */
+        remote_puts(b, ",\"other_ch\":");
+        remote_json(b, chans.ch[c2].number);
+        remote_puts(b, ",\"other_name\":");
+        remote_json(b, chans.ch[c2].name);
+        remote_printf(b, ",\"other_state\":\"%s\"", STATES[st2 >= 0 && st2 <= PS_NO_CHANNELS ? st2 : 0]);
+      }
+      remote_puts(b, "}");
+    }
+    remote_puts(b, "}");
     return 200;
   }
   }
@@ -1165,6 +1456,7 @@ static void remote_apply_settings(void)
   if (c.sleep >= 0 && c.sleep != sleep_min && !asleep) set_sleep(c.sleep);
   if (c.leveller >= 0 && c.leveller != opts.leveller) set_leveller(c.leveller);
   if (c.output >= 0 && c.output != res240) { set_output(c.output); show_toast(res240 ? "240P" : "480"); }
+  if (c.screen2 >= 0 && !asleep) set_screen2(c.screen2);
   if (!chans.count || asleep || testcard_on) return;
   if (c.picture >= 0 && c.picture != zoom) set_zoom(c.picture);
   if (c.audio > 0) {
@@ -1174,27 +1466,43 @@ static void remote_apply_settings(void)
   }
 }
 
-static void remote_apply(void)
+/* tune on the screen in the globals (a remote press) */
+static void remote_tune_here(int kind, size_t idx)
 {
-  remote_apply_settings();
-  int r = atomic_exchange(&remote_req, 0);
-  if (!r || !chans.count) return;
-  int kind = r & 7;
-  size_t idx = (size_t)(r >> 3);
   if (kind == RQ_UP) idx = (cur + 1) % chans.count;
   else if (kind == RQ_DOWN) idx = cur ? cur - 1 : chans.count - 1;
   else if (kind == RQ_LAST) idx = prev;
   if (idx >= chans.count) return;
   if (idx == cur && !asleep && !testcard_on && player_get_state(pl) != PLAYER_ERROR) {
     banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);   /* already on: just say so */
-    qm_open = guide_open = list_open = welcome_on = 0;
     return;
   }
+  logf_(RETRO_LOG_INFO, "remote: %sch %s", stag(), chans.ch[idx].number);
+  tune(idx);
+}
+
+static void remote_apply(void)
+{
+  remote_apply_settings();
+  int r = atomic_exchange(&remote_req, 0);
+  if (!r || !chans.count) return;
+  int kind = r & 7, target = (r >> 3) & 3;
+  size_t idx = (size_t)(r >> 5);
+  if (kind == RQ_FOCUS) { if (!asleep) set_focus(target - 1); return; }
+  int side = target ? target - 1 : focus_side;
+  if (side != focus_side && !(dual && screen2_on)) return;
   /* wake the set and clear the screen, as if the viewer picked up the remote */
+  int woke = asleep;
   asleep = testcard_on = welcome_on = 0;
   qm_open = guide_open = list_open = 0;
-  logf_(RETRO_LOG_INFO, "remote: ch %s", chans.ch[idx].number);
-  tune(idx);
+  int away = side != focus_side;
+  if (away) exchange();
+  remote_tune_here(kind, idx);
+  if (away) exchange();
+  if (woke) {                                        /* bring back the screen(s) not just tuned */
+    if (away) tune(cur);
+    if (dual && screen2_on) { exchange(); if (!away) tune(cur); exchange(); }
+  }
 }
 
 static void publish_state(void)
@@ -1209,6 +1517,14 @@ static void publish_state(void)
   }
   atomic_store(&pub_state, st);
   atomic_store(&pub_cur, chans.count ? (int)cur : -1);
+  atomic_store(&pub_dual, dual);
+  atomic_store(&pub_s2on, screen2_on);
+  atomic_store(&pub_focus, focus_side);
+  if (dual && screen2_on && other.pl && chans.count) {
+    player_state ps = player_get_state(other.pl);
+    atomic_store(&pub_state2, asleep ? PS_OFF : ps == PLAYER_PLAYING ? PS_PLAYING : ps == PLAYER_ERROR ? PS_NO_SIGNAL : PS_TUNING);
+    atomic_store(&pub_cur2, (int)other.cur);
+  } else atomic_store(&pub_cur2, -1);
   if (frame_no % 15) return;                         /* settings: 4 times a second is plenty */
   remote_snap v = { 0 };
   v.sleep_min = sleep_min;
@@ -1263,7 +1579,11 @@ static void handle_input(void)
 #define PAD_X Y
 #define FACE(btn) PRESSED(btn)    /* expands PAD_x before PRESSED pastes it */
   if (asleep) {                                       /* any button switches the set back on */
-    if (down) { asleep = 0; if (chans.count) tune(cur); }
+    if (down) {
+      asleep = 0;
+      if (chans.count) tune(cur);
+      if (dual && screen2_on && chans.count) { exchange(); tune(cur); exchange(); }
+    }
     return;
   }
   if (testcard_on) {
@@ -1279,17 +1599,21 @@ static void handle_input(void)
     return;
   }
   if (qm_open) {
-    if (PRESSED(UP))   qm_sel = (qm_sel + QM_ROWS - 1) % QM_ROWS;
-    if (PRESSED(DOWN)) qm_sel = (qm_sel + 1) % QM_ROWS;
+    qm_build();
+    if (PRESSED(UP))   qm_sel = (qm_sel + qm_n - 1) % qm_n;
+    if (PRESSED(DOWN)) qm_sel = (qm_sel + 1) % qm_n;
+    int row = qm_rows[qm_sel];
     int dir = PRESSED(LEFT) ? -1 : PRESSED(RIGHT) ? 1 : FACE(PAD_A) ? 1 : 0;
-    if (dir && qm_sel == QM_SLEEP) step_sleep(dir);
-    if (dir && qm_sel == QM_AUDIO) step_audio(dir);
-    if (dir && qm_sel == QM_LEVEL) step_leveller(dir);
-    if (dir && qm_sel == QM_ZOOM) set_zoom(!zoom);
-    if (dir && qm_sel == QM_OUTPUT) { set_output(!res240); show_toast(res240 ? "240P" : "480"); }
-    if (FACE(PAD_A) && qm_sel == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
-    if (FACE(PAD_A) && qm_sel == QM_HELP) { qm_open = 0; welcome_on = 1; }
-    if ((FACE(PAD_A) && qm_sel == QM_CLOSE) || FACE(PAD_B) || FACE(PAD_X)) qm_open = 0;
+    if (dir && row == QM_SLEEP) step_sleep(dir);
+    if (dir && row == QM_AUDIO) step_audio(dir);
+    if (dir && row == QM_LEVEL) step_leveller(dir);
+    if (dir && row == QM_ZOOM) set_zoom(!zoom);
+    if (dir && row == QM_OUTPUT) { set_output(!res240); show_toast(res240 ? "240P" : "480"); }
+    if (dir && row == QM_SCREEN2) { set_screen2(!screen2_on); return; }
+    if (FACE(PAD_A) && row == QM_SWAP) { swap_screens(); return; }
+    if (FACE(PAD_A) && row == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
+    if (FACE(PAD_A) && row == QM_HELP) { qm_open = 0; welcome_on = 1; }
+    if ((FACE(PAD_A) && row == QM_CLOSE) || FACE(PAD_B) || FACE(PAD_X)) qm_open = 0;
     return;
   }
   if (guide_open) {
@@ -1306,6 +1630,8 @@ static void handle_input(void)
   if (list_open) {
     if (PRESSED(UP))   list_cursor = list_cursor ? list_cursor - 1 : chans.count - 1;
     if (PRESSED(DOWN)) list_cursor = (list_cursor + 1) % chans.count;
+    if (PRESSED(LEFT))  list_cursor = list_cursor > LIST_ROWS ? list_cursor - LIST_ROWS : 0;          /* a page up */
+    if (PRESSED(RIGHT)) list_cursor = list_cursor + LIST_ROWS < chans.count ? list_cursor + LIST_ROWS : chans.count - 1;
     if (FACE(PAD_A))   { list_open = 0; tune(list_cursor); }
     if (FACE(PAD_B) || PRESSED(SELECT)) list_open = 0;
     return;
@@ -1315,6 +1641,8 @@ static void handle_input(void)
   if (FACE(PAD_B))     tune(prev);
   if (FACE(PAD_A))     banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);
   if (PRESSED(SELECT)) { list_open = 1; list_cursor = cur; }
+  if (dual && PRESSED(LEFT)) set_focus(0);
+  if (dual && PRESSED(RIGHT)) { if (screen2_on) set_focus(1); else show_toast("SCREEN 2 OFF"); }
   if (FACE(PAD_X)) { qm_open = 1; qm_sel = 0; }
   if (PRESSED(START)) {
     guide_open = 1;
@@ -1368,11 +1696,11 @@ RETRO_API void retro_get_system_info(struct retro_system_info *info)
 RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info)
 {
   memset(info, 0, sizeof(*info));
-  info->geometry.base_width = PLAYER_W;
+  info->geometry.base_width = dual ? 2 * PLAYER_W : PLAYER_W;
   info->geometry.base_height = res240 ? PLAYER_H / 2 : PLAYER_H;
-  info->geometry.max_width = PLAYER_W;
+  info->geometry.max_width = dual ? 2 * PLAYER_W : PLAYER_W;
   info->geometry.max_height = PLAYER_H;
-  info->geometry.aspect_ratio = 4.0f / 3.0f;
+  info->geometry.aspect_ratio = dual ? 8.0f / 3.0f : 4.0f / 3.0f;
   info->timing.fps = fps_out;
   info->timing.sample_rate = PLAYER_RATE;
 }
@@ -1425,6 +1753,30 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     free(seen);
     saved_idx = idx;
     tune(idx >= 0 ? (size_t)idx : 0);
+    if (dual) {
+      unsigned h = (unsigned)lastch_hash(src);
+      snprintf(dual_path, sizeof(dual_path), "%s/retrotv-dual-%08x.txt", state_dir, h);
+      memset(&other, 0, sizeof(other));
+      snprintf(other.last_path, sizeof(other.last_path), "%s/retrotv-last2-%08x.txt", state_dir, h);
+      char *t2 = slurp(other.last_path, 4096);
+      int i2 = lastch_find(&chans, t2);
+      free(t2);
+      other.cur = other.prev = i2 >= 0 ? (size_t)i2 : (cur + 1) % chans.count;
+      other.saved_idx = i2;
+      other.zoom = opts.zoom_default;
+      other.pl = player_create();
+      if (other.pl) player_set_margin(other.pl, opts.overscan);
+      char *d = slurp(dual_path, 64);
+      int was_on = d && strstr(d, "screen2=on");
+      free(d);
+      logf_(RETRO_LOG_INFO, "two screens: 1280x480 at 60 Hz, screen 2 %s (ch %s)", was_on ? "on" : "off", chans.ch[other.cur].number);
+      if (was_on && other.pl) {
+        screen2_on = 1;
+        exchange();                                  /* tune screen 2 in the background; focus stays on 1 */
+        tune(cur);
+        exchange();
+      }
+    }
   } else {
     logf_(RETRO_LOG_WARN, "no channels: %s", help_reason);
   }
@@ -1444,6 +1796,9 @@ RETRO_API void retro_unload_game(void)
   rset.kind = RC_NONE;                               /* the server is stopped: no lock needed */
   guide_shutdown();
   if (pl) { player_destroy(pl); pl = NULL; }
+  if (other.pl) { player_destroy(other.pl); other.pl = NULL; }
+  dual = screen2_on = focus_side = gside = dual_save = dual_changed_logged = 0;
+  dual_path[0] = other.last_path[0] = '\0';
   for (int i = 0; i < 200 && atomic_load(&saving); i++) {      /* let a pending write finish (max 2 s) */
     struct timespec ts = { 0, 10 * 1000000L };
     nanosleep(&ts, NULL);
@@ -1471,6 +1826,7 @@ RETRO_API void retro_run(void)
 
   if (asleep) {                                      /* switched off: black and silent */
     memset(fb, 0, sizeof(fb));
+    memset(fb2, 0, sizeof(fb2));
     memset(abuf, 0, sizeof(abuf));
     present();
     audio_batch_cb(abuf, aframes());
@@ -1484,6 +1840,7 @@ RETRO_API void retro_run(void)
     epg_clock(time(NULL), opts.clock24, 1, clk, sizeof(clk));
     testcard_draw(&ts, testcard_side(tc_t), clk);
     testcard_audio(abuf, aframes(), PLAYER_RATE, tc_t, &tc_phase);
+    other_frame();
     present();
     audio_batch_cb(abuf, aframes());
     tc_t += 1.0 / fps_out;
@@ -1495,6 +1852,7 @@ RETRO_API void retro_run(void)
     osd_surface hs = screen();
     draw_help(&hs);
     memset(abuf, 0, sizeof(abuf));
+    other_frame();
     present();
     audio_batch_cb(abuf, aframes());
     frame_no++;
@@ -1506,36 +1864,8 @@ RETRO_API void retro_run(void)
   player_audio(pl, abuf, aframes(), 1.0 / fps_out);
   if (opts.leveller) loud_process(&loud, abuf, aframes(), PLAYER_RATE);   /* even out channel loudness */
   st = player_get_state(pl);
-  char why[160];
-  int att = player_attempt(pl, why, sizeof(why));
-  if (att > logged_attempt) {
-    logf_(RETRO_LOG_WARN, "ch %s attempt %d failed (%s), retrying", chans.ch[cur].number, att - 1, why);
-    logged_attempt = att;
-  }
-  if (st == PLAYER_ERROR && !logged_error) {
-    logf_(RETRO_LOG_WARN, "ch %s NO SIGNAL after %.1fs: %s", chans.ch[cur].number, player_tuning_seconds(pl), player_error(pl));
-    logged_error = 1;
-  }
-  if (st == PLAYER_PLAYING && !logged_playing) {
-    player_info in;
-    player_get_info(pl, &in);
-    logf_(RETRO_LOG_INFO, "playing ch %s after %.2fs (%dx%d %s %.2ffps %s%s)", chans.ch[cur].number,
-          player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
-    logged_playing = 1;
-    played_at = t_now();
-    banner_until = t_now() + opts.banner_secs;   /* show what came on */
-    follow_refresh(in.fps);
-  }
-
-  if (st == PLAYER_PLAYING && logged_playing && stream_fps <= 0) {   /* frame rate measured after it started */
-    player_info in;
-    player_get_info(pl, &in);
-    if (in.fps > 0) {
-      logf_(RETRO_LOG_INFO, "ch %s frame rate %.3f fps (%dx%d)", chans.ch[cur].number, in.fps, in.width, in.height);
-      follow_refresh(in.fps);
-      stream_fps = in.fps;                           /* once, even if the frontend refused a change */
-    }
-  }
+  screen_status(st);
+  other_frame();
 
   int se = atomic_exchange(&save_errno, 0);
   if (se) logf_(RETRO_LOG_WARN, "could not save last channel to %s: %s", last_path, strerror(se));
@@ -1553,8 +1883,7 @@ RETRO_API void retro_run(void)
     welcome_path(wp, sizeof(wp));
     if (!save_text_async(wp, "seen=1\n")) welcome_save = 0;
   }
-  if (st == PLAYER_PLAYING && saved_idx != (int)cur && t_now() - played_at >= REMEMBER_AFTER)
-    last_save_async(cur);
+  if (dual_save && !save_text_async(dual_path, screen2_on ? "screen2=on\n" : "screen2=off\n")) dual_save = 0;
 
   osd_surface s = screen();
   int have = player_video(pl, res240 ? vid : fb);
@@ -1583,6 +1912,7 @@ RETRO_API void retro_run(void)
   else if (show_banner) draw_banner(&s, st);
 
   if (t_now() < toast_until) draw_toast(&s);
+  if (dual && t_now() < focus_flash_until) draw_focus_flash(&s);
 
   double lvl = sleep_level();                        /* fade out before the sleep timer switches off */
   if (lvl < 1.0) {
@@ -1590,6 +1920,9 @@ RETRO_API void retro_run(void)
     for (size_t i = 0; i < sizeof(fb) / sizeof(fb[0]); i++) {
       uint32_t c = fb[i];
       fb[i] = ((((c >> 16) & 0xff) * k >> 8) << 16) | ((((c >> 8) & 0xff) * k >> 8) << 8) | ((c & 0xff) * k >> 8);
+      if (!dual) continue;
+      c = fb2[i];
+      fb2[i] = ((((c >> 16) & 0xff) * k >> 8) << 16) | ((((c >> 8) & 0xff) * k >> 8) << 8) | ((c & 0xff) * k >> 8);
     }
     for (size_t i = 0; i < aframes() * 2; i++) abuf[i] = (int16_t)(abuf[i] * lvl);
   }
