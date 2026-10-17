@@ -146,6 +146,7 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [x] Phone remote page at `/` (served by the core, no install) and `/channels` with Now/Next
 - [x] Two screens: one channel per CRT via ReplayOS Dual horizontal (fixed 1280x480 @ 60 Hz), focus with Left/Right, X menu Screen 2 / Swap
 - [ ] Two screens at 240p (1280x240): needs a test that ReplayOS's dual output handles it
+- [x] Virtual Boy slot: remote start via ReplayOS load_game, `retrotv_launch.sh`, Zaparoo system and channel cards
 - [ ] Ask the ReplayOS author for an official user-core hook
 - [ ] Check what a ReplayOS update does to the install (expect: re-run the installer)
 - [ ] Optional: hardware HEVC decode via V4L2 stateless (the Pi 5 only has HEVC hardware decode)
