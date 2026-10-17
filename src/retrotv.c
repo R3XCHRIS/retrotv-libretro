@@ -97,7 +97,7 @@ static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
 enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
-static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Screen 2 / Swap only in dual mode */
+static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Output in single mode, Screen 2 / Swap in dual mode */
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
 static int sleep_warned;             /* "SLEEP 1" shown */
@@ -141,6 +141,14 @@ static uint32_t noise2 = 777;
 static char dual_path[1100];           /* remembers whether screen 2 is on */
 static int dual_save;                  /* write it when the saver is free */
 static int dual_changed_logged;
+/* Two screens: ReplayOS's two outputs start with a random phase. Out of step,
+ * it waits a whole extra refresh every frame and runs at exactly half rate
+ * (measured on the Pi: 30 calls/s, every one 33 ms apart). Switching modes is
+ * a new dice roll, and resyncing that way proved unreliable, so the output
+ * size is fixed while two screens run; RetroTV only notes a half-rate start. */
+static double pace_last, pace_win_start, pace_check_from, pace_noted;
+static int pace_late, pace_frames;
+static double mono_now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
 static char help_reason[160];      /* why no channels loaded (for the log) */
 static ob_kind ob_why = OB_NO_FILE; /* ... and for the setup screen */
 static char ob_err[160];           /* FFmpeg's error text for OB_FETCH */
@@ -848,13 +856,15 @@ static void apply_options(void)
 /* 480 <-> 240p while running (only from retro_run) */
 static void set_output(int r240)
 {
-  if (r240 == res240) return;                       /* two screens: 1280x480 <-> 1280x240 */
+  if (dual) return;                                  /* fixed size with two screens: applied at start */
+  if (r240 == res240) return;
   int was = res240;
   res240 = r240;
   struct retro_system_av_info av;
   retro_get_system_av_info(&av);
   if (env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av)) {
     opts.res240 = r240;
+
     logf_(RETRO_LOG_INFO, "output %s", dual ? (res240 ? "1280x240 (240p, two screens)" : "1280x480 (two screens)") : res240 ? "640x240 (240p)" : "640x480");
   } else {
     res240 = opts.res240 = was;
@@ -868,6 +878,11 @@ static void check_options(void)
   bool upd = false;
   if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &upd) && upd) {
     apply_options();
+    if (dual && opts.res240 != res240 && !dual_changed_logged) {
+      show_toast("RESTART RETROTV");
+      logf_(RETRO_LOG_INFO, "output %s: applies when RetroTV restarts (two screens)", opts.res240 ? "240p" : "480");
+      dual_changed_logged = 1;
+    }
     if (opts.dual != dual && !dual_changed_logged) {
       show_toast("RESTART RETROTV");
       logf_(RETRO_LOG_INFO, "two screens %s: applies when RetroTV restarts", opts.dual ? "on" : "off");
@@ -986,6 +1001,7 @@ static void qm_build(void)
 {
   qm_n = 0;
   for (int r = 0; r < QM_ROWS; r++) {
+    if (r == QM_OUTPUT && dual) continue;             /* two screens: System Settings, at start */
     if (r == QM_SCREEN2 && !dual) continue;
     if (r == QM_SWAP && !(dual && screen2_on)) continue;
     qm_rows[qm_n++] = r;
@@ -1770,6 +1786,9 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
       int was_on = d && strstr(d, "screen2=on");
       free(d);
       logf_(RETRO_LOG_INFO, "two screens: 1280x%d at 60 Hz, screen 2 %s (ch %s)", res240 ? 240 : 480, was_on ? "on" : "off", chans.ch[other.cur].number);
+      pace_win_start = 0;
+      pace_noted = 0;
+      pace_check_from = mono_now() + 3.0;            /* check once start-up has settled */
       if (was_on && other.pl) {
         screen2_on = 1;
         exchange();                                  /* tune screen 2 in the background; focus stays on 1 */
@@ -1815,8 +1834,30 @@ RETRO_API void retro_unload_game(void)
   saved_idx = -1;
 }
 
+/* two screens: note (once a minute at most) when ReplayOS runs at half rate */
+static void pace_tick(void)
+{
+  if (!dual) return;
+  double t = mono_now();
+  if (pace_last > 0 && t >= pace_check_from) {
+    if (pace_win_start == 0) { pace_win_start = t; pace_late = pace_frames = 0; }
+    pace_frames++;
+    if (t - pace_last > 1.5 / fps_out) pace_late++;
+    if (t - pace_win_start >= 2.0) {
+      int half = pace_frames <= (int)(fps_out * 2 * 0.6) && pace_late * 10 >= pace_frames * 8;
+      if (half && t - pace_noted > 60.0) {
+        logf_(RETRO_LOG_WARN, "two screens out of step: ReplayOS at half rate (%d frames in 2 s) - reopen RetroTV", pace_frames);
+        pace_noted = t;
+      }
+      pace_win_start = 0;
+    }
+  }
+  pace_last = t;
+}
+
 RETRO_API void retro_run(void)
 {
+  pace_tick();
   input_poll_cb();
   check_options();
   handle_input();

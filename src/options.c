@@ -31,7 +31,7 @@ static const opt_def OPTS[] = {
     "Keep each channel's Fit/Zoom choice from the Y button.",
     "picture", "on", { { "on", "On" }, { "off", "Off" } } },
   { "retrotv_dual", "Two screens (dual mode)",
-    "Two CRTs: a 1280x480 picture (1280x240 with Output 240p) for ReplayOS Multi screen = Dual horizontal (set it for RetroTV only). Connect both screens before starting; this applies when RetroTV restarts. Keeps 60 Hz. Turn screen 2 on and off in the X menu.",
+    "Two CRTs: a 1280x480 picture (1280x240 with Output 240p) for ReplayOS Multi screen = Dual horizontal (set it for RetroTV only). Connect both screens before starting. This and Output apply when RetroTV restarts. Keeps 60 Hz. Turn screen 2 on and off in the X menu.",
     "picture", "off", { { "off", "Off" }, { "on", "On" } } },
   { "retrotv_resolution", "Output",
     "640x240 (240p) is progressive like old consoles on a CRT: no interlace flicker, half the vertical detail.",

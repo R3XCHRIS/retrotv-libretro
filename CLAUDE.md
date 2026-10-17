@@ -170,7 +170,13 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   the hard way: both screens connected at boot; **never change geometry or refresh while running**
   (SET_SYSTEM_AV_INFO → page flips fail, main CRT flashes until reboot); Dual smart applies only to
   dual-screen arcade games; per-game Dual horizontal + `_autostart` = ReplayOS segfault at start-up.
-  RetroTV's `retrotv_dual` option (read at load) gives a fixed 1280x480 at 60 Hz: the globals are the
+  Dual modes ReplayOS picks: 1280x480 → `1920x480i` (39.147 MHz, 2496x523) on both outputs;
+  1280x240 → `1920x240p` (39.04 MHz, 2494x261). After any mode change the two outputs start with a
+  random phase; out of step, ReplayOS runs at exactly half rate (retro_run every 33 ms). A
+  re-sent identical mode is ignored, a 1-frame bounce doesn't fully restart the outputs, and a
+  1 s bounce is only a coin toss, so the size is fixed per session and RetroTV just logs it.
+  A loose RGB-Pi v2 HDMI-to-SCART adapter caused most of the "lost sync" flicker blamed on modes.
+  RetroTV's `retrotv_dual` option (read at load) gives a fixed 1280x480 (or 1280x240 with Output 240p) at 60 Hz: the globals are the
   focused screen, `other` the second; `exchange()` swaps them (see the comment in `src/retrotv.c`).
 - **Virtual Boy slot** (`--slot vb|both`, verified 2026-10-17): `[nintendo_vb]` → RetroTV plus an empty
   `roms/nintendo_vb/RetroTV.vb`; `GET /api/v1/load_game?system=nintendo_vb&game_file=RetroTV.vb`
