@@ -7,6 +7,9 @@
 #   --uninstall          give the borrowed slot back and remove the core
 #   --version vX.Y.Z     install a specific release instead of the latest
 #   --storage DIR        ReplayOS storage root (default: the one ReplayOS uses)
+#   --slot SLOT          where RetroTV goes: avtest (Extra > audio_video_test, the default),
+#                        vb (Nintendo Virtual Boy: remote start, Zaparoo) or both.
+#                        Without it, an update keeps the last choice.
 #
 # What it does: downloads the release (core + scripts), checks the SHA-256
 # sums, copies the core to <storage>/retrotv/ and the scripts to
@@ -19,6 +22,7 @@ REPO="R3XCHRIS/retrotv-libretro"
 BASE="${RETROTV_BASE:-https://github.com/$REPO/releases/latest/download}"
 STORAGE=""
 UNINSTALL=0
+SLOTARG=()
 
 say() { echo "[retrotv] $*"; }
 die() { echo "[retrotv] ERROR: $*" >&2; exit 1; }
@@ -28,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --uninstall) UNINSTALL=1 ;;
     --version) [[ $# -ge 2 ]] || die "--version needs a tag, e.g. v0.2.0"; BASE="https://github.com/$REPO/releases/download/$2"; shift ;;
     --storage) [[ $# -ge 2 ]] || die "--storage needs a directory"; STORAGE="$2"; shift ;;
+    --slot) [[ $# -ge 2 ]] || die "--slot needs avtest, vb or both"; SLOTARG=(--slot "$2"); shift ;;
     NULL) ;;                                           # ReplayOS passes NULL from the Extras menu
     *) die "unknown option: $1" ;;
   esac
@@ -59,26 +64,31 @@ command -v curl >/dev/null || die "curl is needed"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 FILES="retrotv_libretro.so retrotv_install.sh retrotv_uninstall.sh retrotv_update.sh SHA256SUMS"
+EXTRAS="retrotv_launch.sh retrotv-zaparoo.toml"     # newer releases only: remote start, Zaparoo
 say "downloading from $BASE"
 for f in $FILES; do
   curl -fsSL --connect-timeout 10 --retry 3 -o "$TMP/$f" "$BASE/$f" || die "download failed: $f (no internet, or no release yet?)"
 done
-( cd "$TMP" && sha256sum -c --quiet SHA256SUMS ) || die "checksum mismatch - download corrupted, not installing"
+for f in $EXTRAS; do
+  grep -q " $f\$" "$TMP/SHA256SUMS" && { curl -fsSL --connect-timeout 10 --retry 3 -o "$TMP/$f" "$BASE/$f" || die "download failed: $f"; }
+done
+( cd "$TMP" && sha256sum -c --quiet --ignore-missing SHA256SUMS ) || die "checksum mismatch - download corrupted, not installing"
 say "checksums OK"
 
 mkdir -p "$STORAGE/retrotv/backup" "$EXTRA"
 [[ -f $STORAGE/retrotv/retrotv_libretro.so ]] && cp "$STORAGE/retrotv/retrotv_libretro.so" "$STORAGE/retrotv/backup/retrotv_libretro.so.previous"
 cp "$TMP/retrotv_libretro.so" "$STORAGE/retrotv/retrotv_libretro.so"   # plain cp: NFS squashes root
+for f in $EXTRAS; do [[ -f $TMP/$f ]] && cp "$TMP/$f" "$STORAGE/retrotv/$f"; done
 cp "$TMP/retrotv_install.sh" "$TMP/retrotv_uninstall.sh" "$TMP/retrotv_update.sh" "$EXTRA/"
 # ReplayOS won't run an Extras script that isn't executable ("Forbidden"); downloads aren't, and
 # cp keeps an existing file's mode, so a script first copied without +x stayed that way
 chmod 755 "$EXTRA/retrotv_install.sh" "$EXTRA/retrotv_uninstall.sh" "$EXTRA/retrotv_update.sh" || say "warning: could not mark the Extras scripts executable"
 say "core and scripts copied"
 
-bash "$EXTRA/retrotv_install.sh"
+bash "$EXTRA/retrotv_install.sh" "${SLOTARG[@]}"
 if grep -qvE '^[[:space:]]*(#|$)' "$STORAGE/retrotv/playlist.txt" 2>/dev/null; then
-  say "your playlist.txt is kept - open Extra > audio_video_test"
+  say "your playlist.txt is kept"
 else
-  say "next: put your playlist link in $STORAGE/retrotv/playlist.txt, then open Extra > audio_video_test"
+  say "next: put your playlist link in $STORAGE/retrotv/playlist.txt"
 fi
 say "update later from Extra > retrotv_update.sh, remove with Extra > retrotv_uninstall.sh"
