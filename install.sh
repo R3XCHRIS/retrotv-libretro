@@ -70,6 +70,9 @@ mkdir -p "$STORAGE/retrotv/backup" "$EXTRA"
 [[ -f $STORAGE/retrotv/retrotv_libretro.so ]] && cp "$STORAGE/retrotv/retrotv_libretro.so" "$STORAGE/retrotv/backup/retrotv_libretro.so.previous"
 cp "$TMP/retrotv_libretro.so" "$STORAGE/retrotv/retrotv_libretro.so"   # plain cp: NFS squashes root
 cp "$TMP/retrotv_install.sh" "$TMP/retrotv_uninstall.sh" "$TMP/retrotv_update.sh" "$EXTRA/"
+# ReplayOS won't run an Extras script that isn't executable ("Forbidden"); downloads aren't, and
+# cp keeps an existing file's mode, so a script first copied without +x stayed that way
+chmod 755 "$EXTRA/retrotv_install.sh" "$EXTRA/retrotv_uninstall.sh" "$EXTRA/retrotv_update.sh" || say "warning: could not mark the Extras scripts executable"
 say "core and scripts copied"
 
 bash "$EXTRA/retrotv_install.sh"
