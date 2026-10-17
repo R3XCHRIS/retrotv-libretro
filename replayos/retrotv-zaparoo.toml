@@ -1,0 +1,19 @@
+# RetroTV for Zaparoo Core (ReplayOS). Installed by retrotv_install.sh into
+# Zaparoo's launchers folder when Zaparoo is found (needs the Virtual Boy slot).
+#
+# "RetroTV" appears as a system in the Zaparoo App: picking it, or a card
+# written from it, starts RetroTV. Like every Zaparoo launch on ReplayOS, it
+# first stops what's playing (ReplayOS restarts).
+#
+# For channel cards use ZapScript, which tunes without restarting anything:
+#   **execute:bash /media/sd/retrotv/retrotv_launch.sh 36
+# (the installer adds the matching allow_execute line to Zaparoo's config).
+
+[[launchers.custom]]
+id = "RetroTV"
+kind = "virtual_system"
+backend = "command"
+name = "RetroTV"
+categories = ["Other"]
+lifecycle = "background"
+execute = "bash /media/sd/retrotv/retrotv_launch.sh"

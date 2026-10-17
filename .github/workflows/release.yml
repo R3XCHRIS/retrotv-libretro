@@ -25,7 +25,7 @@ jobs:
       - name: Release files
         run: |
           mkdir -p dist
-          cp build/retrotv_libretro.so replayos/retrotv_install.sh replayos/retrotv_uninstall.sh replayos/retrotv_update.sh dist/
+          cp build/retrotv_libretro.so replayos/retrotv_install.sh replayos/retrotv_uninstall.sh replayos/retrotv_update.sh replayos/retrotv_launch.sh replayos/retrotv-zaparoo.toml dist/
           cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Publish the release
         env:

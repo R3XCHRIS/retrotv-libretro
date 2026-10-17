@@ -172,6 +172,16 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   dual-screen arcade games; per-game Dual horizontal + `_autostart` = ReplayOS segfault at start-up.
   RetroTV's `retrotv_dual` option (read at load) gives a fixed 1280x480 at 60 Hz: the globals are the
   focused screen, `other` the second; `exchange()` swaps them (see the comment in `src/retrotv.c`).
+- **Virtual Boy slot** (`--slot vb|both`, verified 2026-10-17): `[nintendo_vb]` → RetroTV plus an empty
+  `roms/nintendo_vb/RetroTV.vb`; `GET /api/v1/load_game?system=nintendo_vb&game_file=RetroTV.vb`
+  (token header) starts it from the menu: no autostart, no restart. Settings and saves are per
+  system (`config/settings/system/<crt|lcd>/nintendo_vb.cfg`, `saves/nintendo_vb/`).
+  `replayos/retrotv_launch.sh` (installed to **/media/sd/retrotv/**) starts and tunes it.
+  Lessons: Zaparoo's launch on ReplayOS first "stops the active launcher" = **restarts
+  replay.service**; a script running from `/media/nfs` during that restart keeps the share busy
+  and ReplayOS falls back to `system_storage = "sd"` (systems list empties). So the launcher
+  lives on the SD card and channel cards use `**execute` (allow_execute), not launches.
+  `audio_system_volume = "0"` in replay.cfg means volume **Off** (scale 10…0).
 - The long-term fix is an official "user cores" hook from the ReplayOS author.
 
 ## Roadmap and design
