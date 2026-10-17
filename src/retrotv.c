@@ -97,7 +97,7 @@ static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
 enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
-static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Output in single mode, Screen 2 / Swap in dual mode */
+static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Screen 2 / Swap only in dual mode */
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
 static int sleep_warned;             /* "SLEEP 1" shown */
@@ -133,6 +133,7 @@ static int focus_side;                 /* physical screen with the focus: 0 = sc
 static int gside;                      /* physical screen whose state is in the globals right now */
 static screen_state other;             /* the screen without the focus */
 static uint32_t fb2[PLAYER_W * PLAYER_H];              /* the other screen's picture */
+static uint32_t vid2[PLAYER_W * PLAYER_H];             /* 240p: its 640x480 picture before halving */
 static uint32_t dualfb[2 * PLAYER_W * PLAYER_H];
 static int16_t mutebuf[(PLAYER_RATE / 50) * 2];        /* the other screen's audio, read and dropped */
 static double focus_flash_until;
@@ -207,11 +208,12 @@ static void present(void)
 {
   if (!dual) { video_cb(fb, PLAYER_W, res240 ? PLAYER_H / 2 : PLAYER_H, PLAYER_W * sizeof(uint32_t)); return; }
   const uint32_t *l = focus_side ? fb2 : fb, *r = focus_side ? fb : fb2;   /* screen 1 is the left half */
-  for (int y = 0; y < PLAYER_H; y++) {
+  int rows = res240 ? PLAYER_H / 2 : PLAYER_H;     /* 240p: both pictures are in their top halves */
+  for (int y = 0; y < rows; y++) {
     memcpy(dualfb + (size_t)y * 2 * PLAYER_W, l + (size_t)y * PLAYER_W, PLAYER_W * sizeof(uint32_t));
     memcpy(dualfb + (size_t)y * 2 * PLAYER_W + PLAYER_W, r + (size_t)y * PLAYER_W, PLAYER_W * sizeof(uint32_t));
   }
-  video_cb(dualfb, 2 * PLAYER_W, PLAYER_H, 2 * PLAYER_W * sizeof(uint32_t));
+  video_cb(dualfb, 2 * PLAYER_W, rows, 2 * PLAYER_W * sizeof(uint32_t));
 }
 /* "screen 2: " in log lines while two screens play */
 static const char *stag(void) { return dual && screen2_on ? (gside ? "screen 2: " : "screen 1: ") : ""; }
@@ -836,8 +838,7 @@ static void apply_options(void)
   if (saved_res240 >= 0 && opts.res240 == saved_res240) opts.res240 = r240;
   else saved_res240 = opts.res240;
   if (!pl) dual = opts.dual;                         /* dual mode is fixed for the session */
-  if (dual) opts.res240 = 0;
-  if (!pl) res240 = opts.res240;                     /* at load the frontend asks for the size next */
+  if (!pl) res240 = opts.res240;                     /* in dual mode too: fixed for the session */                     /* at load the frontend asks for the size next */
   loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
   theme_set(opts.theme);
   if (pl) player_set_margin(pl, opts.overscan);
@@ -847,15 +848,14 @@ static void apply_options(void)
 /* 480 <-> 240p while running (only from retro_run) */
 static void set_output(int r240)
 {
-  if (dual) return;                                  /* fixed 1280x480 in dual mode */
-  if (r240 == res240) return;
+  if (r240 == res240) return;                       /* two screens: 1280x480 <-> 1280x240 */
   int was = res240;
   res240 = r240;
   struct retro_system_av_info av;
   retro_get_system_av_info(&av);
   if (env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av)) {
     opts.res240 = r240;
-    logf_(RETRO_LOG_INFO, "output %s", res240 ? "640x240 (240p)" : "640x480");
+    logf_(RETRO_LOG_INFO, "output %s", dual ? (res240 ? "1280x240 (240p, two screens)" : "1280x480 (two screens)") : res240 ? "640x240 (240p)" : "640x480");
   } else {
     res240 = opts.res240 = was;
     logf_(RETRO_LOG_WARN, "frontend refused the %s output", r240 ? "240p" : "480-line");
@@ -986,7 +986,6 @@ static void qm_build(void)
 {
   qm_n = 0;
   for (int r = 0; r < QM_ROWS; r++) {
-    if (r == QM_OUTPUT && dual) continue;                       /* a size change would break dual output */
     if (r == QM_SCREEN2 && !dual) continue;
     if (r == QM_SWAP && !(dual && screen2_on)) continue;
     qm_rows[qm_n++] = r;
@@ -1222,13 +1221,14 @@ static void draw_focus_flash(osd_surface *s)
 static void other_frame(void)
 {
   if (!dual) return;
-  osd_surface s2 = { fb2, PLAYER_W, PLAYER_H, PLAYER_W, 0 };
+  osd_surface s2 = { fb2, PLAYER_W, PLAYER_H, PLAYER_W, res240 };
   if (!screen2_on || !chans.count || !other.pl) { draw_standby(&s2); return; }
   exchange();
   player_audio(pl, mutebuf, aframes(), 1.0 / fps_out);
   player_state st = player_get_state(pl);
   screen_status(st);
-  int have = player_video(pl, fb2);
+  int have = player_video(pl, res240 ? vid2 : fb2);
+  if (res240 && have) halve_lines(vid2, fb2);
   if (st == PLAYER_ERROR) draw_no_signal(&s2);
   else if (st != PLAYER_PLAYING && !have) {
     if (opts.static_vhs) osd_static_vhs(&s2, &noise2, (unsigned)frame_no);
@@ -1769,7 +1769,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
       char *d = slurp(dual_path, 64);
       int was_on = d && strstr(d, "screen2=on");
       free(d);
-      logf_(RETRO_LOG_INFO, "two screens: 1280x480 at 60 Hz, screen 2 %s (ch %s)", was_on ? "on" : "off", chans.ch[other.cur].number);
+      logf_(RETRO_LOG_INFO, "two screens: 1280x%d at 60 Hz, screen 2 %s (ch %s)", res240 ? 240 : 480, was_on ? "on" : "off", chans.ch[other.cur].number);
       if (was_on && other.pl) {
         screen2_on = 1;
         exchange();                                  /* tune screen 2 in the background; focus stays on 1 */
