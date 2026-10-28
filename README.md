@@ -115,7 +115,7 @@ Button names are the labels on an Xbox-style pad.
 | X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls (with two screens: Screen 2 on/off and Swap screens instead of 480/240p) |
 | Start | TV guide: Up/Down channel, Left/Right 30 minutes, A to watch, B to close |
 | Select | Channel list: Up/Down one channel, Left/Right a page, A to watch, B to close |
-| R2 / L2 | Pause and play on (the channel keeps arriving in memory: up to about 15 minutes at 8–10 Mbit/s, less with both screens paused; it plays on by itself when full) / back to live. Also in the X menu |
+| R2 / L2 | Pause (a VCR-style still frame, or a clean still: *Paused picture* option) and play on (the channel keeps arriving in memory: up to about 15 minutes at 8–10 Mbit/s, less with both screens paused; it plays on by itself when full) / back to live. Also in the X menu |
 | Left / Right | With [two screens](#two-screens): move the focus (and the sound) to screen 1 / screen 2 |
 
 <p align="center">
@@ -152,6 +152,7 @@ watch: they apply immediately and last until you quit.
 | | Button hints | On, Off |
 | | Colour theme | Cable Navy, Teletext, Green Phosphor |
 | | Tuning picture | Classic snow, VHS |
+| | Paused picture | VHS tape (a VCR's shaky still frame with a noise bar), Still picture |
 | Remote control | Remote control | This device only, Home network, Off |
 
 <p align="center">

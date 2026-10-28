@@ -1,5 +1,7 @@
 #include "osd.h"
 
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "font8x8_basic.h"
@@ -109,6 +111,73 @@ void osd_static_vhs(osd_surface *s, uint32_t *seed, unsigned frame)
       r = r < 0 ? 0 : r > 255 ? 255 : r;
       b = b < 0 ? 0 : b > 255 ? 255 : b;
       row[x] = OSD_RGB(r, v, b);
+    }
+  }
+}
+
+static uint32_t xs32(uint32_t *s) { *s ^= *s << 13; *s ^= *s >> 17; *s ^= *s << 5; return *s; }
+
+/* a row moved off pixels to the right (left if negative); the gap is black, as on tape */
+static void shift_row(uint32_t *row, uint32_t *tmp, int w, int off)
+{
+  if (!off) return;
+  for (int x = 0; x < w; x++) {
+    int sx = x - off;
+    tmp[x] = sx >= 0 && sx < w ? row[sx] : 0;
+  }
+  memcpy(row, tmp, (size_t)w * sizeof(*row));
+}
+
+void osd_vhs_pause(osd_surface *s, uint32_t *seed, unsigned frame)
+{
+  enum { MAXW = 2048 };
+  uint32_t tmp[MAXW];
+  int rows = osd_rows(s), w = s->w, k = s->vshift ? 2 : 1;      /* logical pixels per buffer row */
+  if (w > MAXW || rows < 8) return;
+
+  /* the still frame shakes: a row up or down for a few frames, now and then */
+  uint32_t h = (frame / 3) * 2654435761u;
+  int dy = (h >> 28) < 5 ? (int)(h >> 26 & 1) * 2 - 1 : 0;
+  if (dy > 0) {
+    memmove(s->px + (size_t)s->pitch, s->px, (size_t)(rows - 1) * (size_t)s->pitch * sizeof(*s->px));
+    memset(s->px, 0, (size_t)w * sizeof(*s->px));
+  } else if (dy < 0) {
+    memmove(s->px, s->px + (size_t)s->pitch, (size_t)(rows - 1) * (size_t)s->pitch * sizeof(*s->px));
+    memset(s->px + (size_t)(rows - 1) * (size_t)s->pitch, 0, (size_t)w * sizeof(*s->px));
+  }
+
+  /* the noise bar sits in the lower third and drifts; a faint one flickers higher up */
+  double t = frame * 0.013;
+  int c1 = (int)(rows * (0.74 + 0.05 * sin(t))), h1 = 26 / k;
+  int c2 = (int)(rows * (0.22 - 0.04 * sin(t * 1.7))), h2 = 8 / k;
+  int band2 = (frame / 5) % 4 != 0;
+  int foot = 7 / k;                                  /* head-switching lines at the bottom */
+
+  for (int y = 0; y < rows; y++) {
+    uint32_t *row = s->px + (size_t)y * (size_t)s->pitch;
+    int d1 = abs(y - c1), d2 = abs(y - c2);
+    int a = 0;                                       /* noise strength 0..256 */
+    if (d1 < h1) a = 210 - d1 * 170 / h1;
+    else if (band2 && d2 < h2) a = 110 - d2 * 90 / h2;
+    int off = (int)(sin(y * k * 0.045 + frame * 0.31) * 1.3) + ((xs32(seed) & 15) == 0 ? 1 : 0);
+    if (a > 100) off += (int)(xs32(seed) % 23) + a / 16;          /* torn lines in the bar */
+    if (y >= rows - foot) off += (y - (rows - foot) + 1) * 14 / foot + (int)(xs32(seed) % 5);
+    shift_row(row, tmp, w, off);
+    if (!a) continue;
+    int n = 0, run = 0;
+    for (int x = 0; x < w; x++) {
+      uint32_t r = xs32(seed), c = row[x];
+      if (run-- <= 0) {                              /* tape noise comes in horizontal streaks */
+        n = (r & 7) == 0 ? 230 + (int)(r >> 3 & 25) : (int)(r >> 3 & 0x7f);
+        run = 3 + (int)(r >> 10 & 31);
+      }
+      int cr = (int)(c >> 16 & 0xff), cg = (int)(c >> 8 & 0xff), cb = (int)(c & 0xff);
+      cr = (cr * (256 - a) + (n + (int)(r >> 16 & 31) - 16) * a) >> 8;
+      cg = (cg * (256 - a) + n * a) >> 8;
+      cb = (cb * (256 - a) + (n + (int)(r >> 21 & 31) - 16) * a) >> 8;
+      cr = cr < 0 ? 0 : cr > 255 ? 255 : cr;
+      cb = cb < 0 ? 0 : cb > 255 ? 255 : cb;
+      row[x] = OSD_RGB(cr, cg > 255 ? 255 : cg, cb);
     }
   }
 }

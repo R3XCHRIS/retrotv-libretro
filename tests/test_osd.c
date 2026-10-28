@@ -82,6 +82,35 @@ int main(void)
   for (int i = 1; i < W; i++) distinct += px[i] != px[i - 1];
   CHECK(distinct > 4);
 
+  /* paused VHS: in place, same seed and frame give the same picture; most lines stay the picture */
+  {
+    enum { PW = 640, PH = 480 };
+    static uint32_t a[PW * PH], b[PW * PH], orig[PW * PH];
+    for (int y = 0; y < PH; y++) for (int x = 0; x < PW; x++) orig[y * PW + x] = OSD_RGB(x & 0xff, y & 0xff, 128);
+    for (unsigned f = 0; f < 200; f += 7) {
+      osd_surface sa = { a, PW, PH, PW, 0 }, sb = { b, PW, PH, PW, 0 };
+      uint32_t s1 = 99, s2 = 99;
+      memcpy(a, orig, sizeof(a));
+      memcpy(b, orig, sizeof(b));
+      osd_vhs_pause(&sa, &s1, f);
+      osd_vhs_pause(&sb, &s2, f);
+      CHECK(!memcmp(a, b, sizeof(a)) && s1 == s2 && s1 != 99);
+      int same = 0;                                  /* the middle of a row: still the picture, maybe shifted sideways */
+      for (int y = 0; y < PH; y++) {
+        uint32_t v = a[y * PW + 320];
+        int red = (int)((v >> 16) & 0xff);           /* was 320 & 0xff = 64 before any shift */
+        same += (v & 0xff) == 128 && red >= 64 - 60 && red <= 64 + 60;
+      }
+      CHECK(same > PH * 3 / 4);
+    }
+    osd_surface s240 = { a, PW, PH, PW, 1 };          /* 240p: half the rows, no overrun (ASan) */
+    uint32_t s3 = 5;
+    memcpy(a, orig, sizeof(a));
+    osd_vhs_pause(&s240, &s3, 42);
+    osd_surface tiny = { a, 4, 4, 4, 0 };
+    osd_vhs_pause(&tiny, &s3, 1);                    /* too small: left alone */
+  }
+
   if (fails) { fprintf(stderr, "%d failure(s)\n", fails); return 1; }
   puts("test_osd: all passed");
   return 0;
