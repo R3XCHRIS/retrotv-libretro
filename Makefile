@@ -36,7 +36,7 @@ src/webui.c: src/webui.html scripts/embed.py
 
 test: | build
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_m3u tests/test_m3u.c src/m3u.c
-	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_osd tests/test_osd.c src/osd.c
+	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_osd tests/test_osd.c src/osd.c -lm
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_aspect tests/test_aspect.c src/aspect.c
 	build/test_m3u
 	build/test_osd
@@ -46,7 +46,7 @@ test: | build
 	build/test_loud
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_epg tests/test_epg.c src/epg.c
 	build/test_lastch
-	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_guide tests/test_guide.c src/guide.c src/epg.c src/osd.c src/m3u.c src/theme.c
+	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_guide tests/test_guide.c src/guide.c src/epg.c src/osd.c src/m3u.c src/theme.c -lm
 	build/test_epg
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -Iinclude -fsanitize=address,undefined -o build/test_options tests/test_options.c src/options.c
 	build/test_guide

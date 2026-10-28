@@ -54,6 +54,9 @@ static const opt_def OPTS[] = {
   { "retrotv_static_style", "Tuning picture",
     "What you see while a channel tunes.",
     "interface", "classic", { { "classic", "Classic snow" }, { "vhs", "VHS" } } },
+  { "retrotv_pause_style", "Paused picture",
+    "What a paused channel looks like: a VCR's shaky still frame with a noise bar, or a clean still.",
+    "interface", "vhs", { { "vhs", "VHS tape" }, { "still", "Still picture" } } },
   { "retrotv_blip", "Channel-change sound",
     "A short click when you change channel, like an old TV.",
     "sound", "off", { { "off", "Off" }, { "on", "On" } } },
@@ -104,6 +107,7 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   const char *t = val("retrotv_theme", get, ctx);
   o->theme = !strcmp(t, "teletext") ? 1 : !strcmp(t, "phosphor") ? 2 : 0;
   o->static_vhs = !strcmp(val("retrotv_static_style", get, ctx), "vhs");
+  o->pause_vhs = !strcmp(val("retrotv_pause_style", get, ctx), "vhs");
   o->blip = !strcmp(val("retrotv_blip", get, ctx), "on");
   o->overscan = atoi(val("retrotv_overscan", get, ctx));
   const char *r = val("retrotv_refresh", get, ctx);

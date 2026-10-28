@@ -32,5 +32,10 @@ void osd_static(osd_surface *s, uint32_t *seed);
 /* VHS-style static: colour speckle, a rolling bright tracking band and
  * jittered lines. frame advances the band. */
 void osd_static_vhs(osd_surface *s, uint32_t *seed, unsigned frame);
+/* A VCR's paused picture, applied in place to the held frame (call every
+ * frame on a fresh copy): the picture shakes a line now and then, a noise
+ * bar tears the lines it crosses, every line wobbles a little and the bottom
+ * lines bend (head switching). frame moves the bars; seed is advanced. */
+void osd_vhs_pause(osd_surface *s, uint32_t *seed, unsigned frame);
 
 #endif

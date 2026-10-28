@@ -1071,6 +1071,14 @@ static void go_live(void)
   if (gside == focus_side) show_toast("LIVE");
 }
 
+/* a paused picture looks like a VCR's still frame (the screen in the globals) */
+static void vhs_if_paused(osd_surface *s, int have, uint32_t *seed)
+{
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  if (have && sh.paused && opts.pause_vhs) osd_vhs_pause(s, seed, (unsigned)frame_no);
+}
+
 /* the memory for paused channels is full: play on from where it is */
 static void shift_tick(void)
 {
@@ -1351,6 +1359,7 @@ static void other_frame(void)
   screen_status(st);
   int have = player_video(pl, res240 ? vid2 : fb2);
   if (res240 && have) halve_lines(vid2, fb2);
+  vhs_if_paused(&s2, have, &noise2);
   if (st == PLAYER_ERROR) draw_no_signal(&s2);
   else if (st != PLAYER_PLAYING && !have) {
     if (opts.static_vhs) osd_static_vhs(&s2, &noise2, (unsigned)frame_no);
@@ -2115,6 +2124,7 @@ RETRO_API void retro_run(void)
   osd_surface s = screen();
   int have = player_video(pl, res240 ? vid : fb);
   if (res240 && have) halve_lines(vid, fb);
+  vhs_if_paused(&s, have, &noise_seed);
   if (st == PLAYER_ERROR) {
     draw_no_signal(&s);
   } else if (st != PLAYER_PLAYING && !have) {
