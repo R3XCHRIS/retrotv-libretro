@@ -128,6 +128,9 @@ void remote_parse(const char *req, remote_cmd *c)
   else if (IS("/up")) c->kind = RC_UP;
   else if (IS("/down")) c->kind = RC_DOWN;
   else if (IS("/last")) c->kind = RC_LAST;
+  else if (IS("/pause")) c->kind = RC_PAUSE;
+  else if (IS("/play")) c->kind = RC_PLAY;
+  else if (IS("/live")) c->kind = RC_LIVE;
   else if (IS("/tune")) {
     int a = query_get(q, qlen, "ch", c->ch, sizeof(c->ch));
     int b = query_get(q, qlen, "name", c->name, sizeof(c->name));
@@ -135,6 +138,7 @@ void remote_parse(const char *req, remote_cmd *c)
   } else c->kind = RC_NONE;
 #undef IS
   if (c->kind == RC_TUNE || c->kind == RC_UP || c->kind == RC_DOWN || c->kind == RC_LAST || c->kind == RC_FOCUS
+      || c->kind == RC_PAUSE || c->kind == RC_PLAY || c->kind == RC_LIVE
       || c->kind == RC_SETTINGS || c->kind == RC_SET) {
     char v[8];
     if (query_get(q, qlen, "screen", v, sizeof(v))) {
