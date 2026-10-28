@@ -22,6 +22,7 @@ real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to in
 - **Picks up where you left off:** remembers the last channel you watched
 - **Made for CRTs:** 4:3, 50 Hz on 25/50 fps channels (smooth PAL), optional **240p**, overscan margin
 - **Zoom button** to fill the screen with letterboxed 16:9 pictures, remembered per channel
+- **Pause** a live channel for up to about 15 minutes and carry on where you left off, or jump back to live
 - **Volume leveller** so loud and quiet channels sound alike
 - **Sleep timer**, audio track choice, **colour themes** and a VHS tuning look
 - **Remote control** over HTTP: tune a channel from Zaparoo, a script or a phone
@@ -114,6 +115,7 @@ Button names are the labels on an Xbox-style pad.
 | X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls (with two screens: Screen 2 on/off and Swap screens instead of 480/240p) |
 | Start | TV guide: Up/Down channel, Left/Right 30 minutes, A to watch, B to close |
 | Select | Channel list: Up/Down one channel, Left/Right a page, A to watch, B to close |
+| R2 / L2 | Pause and play on (the channel keeps arriving in memory: up to about 15 minutes at 8–10 Mbit/s, less with both screens paused; it plays on by itself when full) / back to live. Also in the X menu |
 | Left / Right | With [two screens](#two-screens): move the focus (and the sound) to screen 1 / screen 2 |
 
 <p align="center">
@@ -235,12 +237,13 @@ Fit/Zoom and 480/240p, the same as the X menu on the TV.
 | `/tune?ch=36` | tune channel 36 (the number shown on the banner) |
 | `/tune?name=star+trek` | tune by name: exact first, else the first name that contains it |
 | `/up`, `/down`, `/last` | channel up, down, previous |
+| `/pause`, `/play`, `/live` | pause the channel (it keeps arriving in memory, up to about 15 minutes), play on from there, or go back to live. `/status` shows `paused` and `behind` (seconds) |
 | `/status` | what's on, as JSON: channel, name, state, programme now and next |
 | `/channels` | every channel (number, name, group, logo) with Now/Next, their times and poster images, as JSON |
 | `/settings` | sleep timer, audio track, volume leveller, picture and output, as JSON |
 | `/set?sleep=30&leveller=loud` | change settings: `sleep` (0, 15, 30, 60, 90), `audio` (track 1, 2, ...), `leveller` (off, normal, loud), `picture` (fit, zoom), `output` (480, 240) |
 | `/help` | this list, as text |
-| `screen=1` / `screen=2` | with two screens: add to `/tune`, `/up`, `/down`, `/last` to pick the screen (default: the focused one) |
+| `screen=1` / `screen=2` | with two screens: add to `/tune`, `/up`, `/down`, `/last`, `/pause`, `/play`, `/live` to pick the screen (default: the focused one) |
 | `/settings?screen=2`, `/set?picture=zoom&screen=2` | with two screens: read or change that screen's picture (Fit/Zoom), volume leveller and audio track without moving the focus or the sound. The reply has `"screen": 2`. Each screen keeps its own leveller, used while it has the focus. `sleep`, `output` and `screen2` always apply to the whole box |
 | `/focus?screen=2` | move the focus (and the sound) to screen 2 |
 | `/set?screen2=on` | turn screen 2 on or off |

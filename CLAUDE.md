@@ -74,7 +74,7 @@ features are configured in Dispatcharr and selected through the playlist URL:
 | File | Role |
 |---|---|
 | `src/retrotv.c` | libretro entry points, input, UI state and screens (banner, list, X menu, setup, welcome), sleep timer, guide fetch thread, saved state |
-| `src/player.c` | a stream per tune: FFmpeg demux/decode thread → video ring (6 frames) + audio ring (3 s), audio is the master clock; old streams closed by a reaper thread; zoom crop, overscan margin, audio track choice |
+| `src/player.c` | a stream per tune: a reader thread (FFmpeg demux → packet queue) and a decode thread → video ring (6 frames) + audio ring (3 s), audio is the master clock; old streams closed by a reaper thread; zoom crop, overscan margin, audio track choice. Pause (timeshift): the consumer stops while packets keep queuing in RAM, one 1 GiB budget for all streams (`SHIFT_MAX`, ~13 min at 10 Mbit/s); full → plays on by itself |
 | `src/ffapi.c/.h` | FFmpeg functions resolved with `dlopen` by soname. To use a new FFmpeg function, add it to `RETROTV_FF_FUNCS` and call it as `p_<name>` |
 | `src/m3u.c/.h` | IPTV M3U parser (`#EXTINF` tvg-* attributes, `x-tvg-url`, relative paths) |
 | `src/plconf.c` | playlist.txt: the playlist line and `epg=` |

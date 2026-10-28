@@ -71,4 +71,17 @@ void player_audio(player *p, int16_t *out, size_t frames, double frame_seconds);
  * Returns 1 if dst holds a picture, 0 if there is nothing yet. */
 int player_video(player *p, uint32_t *dst);
 
+/* Pause (timeshift) a playing stream: the picture and sound hold while the
+ * stream keeps arriving into memory; play carries on from the same moment,
+ * now behind live. A new tune (player_open) goes back to live. */
+typedef struct {
+  int paused;
+  double paused_for;   /* seconds, this pause */
+  double behind;       /* seconds behind live, all pauses since the tune */
+  double room;         /* seconds more it can stay paused at this stream's rate (-1 = not known yet) */
+  int full;            /* the timeshift memory (shared by every stream) is full: resume */
+} player_shift;
+void player_pause(player *p, int on);
+void player_get_shift(player *p, player_shift *s);
+
 #endif

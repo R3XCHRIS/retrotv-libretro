@@ -40,6 +40,7 @@
   X(avcodec, av_packet_alloc)                                 \
   X(avcodec, av_packet_free)                                  \
   X(avcodec, av_packet_unref)                                 \
+  X(avcodec, av_packet_move_ref)                              \
   X(avutil, av_frame_alloc)                                   \
   X(avutil, av_frame_free)                                    \
   X(avutil, av_frame_unref)                                   \
