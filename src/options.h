@@ -14,6 +14,7 @@ typedef struct {
   int hints;               /* button hints on the banner */
   int theme;               /* THEME_NAVY, THEME_TELETEXT, THEME_PHOSPHOR */
   int static_vhs;          /* tuning picture: 0 classic snow, 1 VHS */
+  int pause_vhs;           /* paused picture: 1 VHS tape effect, 0 a clean still */
   int blip;                /* channel-change sound */
   int overscan;            /* video margin, percent per side: 0, 5, 10 */
   int refresh;             /* 0 auto (follow the stream), 50, 60 */
