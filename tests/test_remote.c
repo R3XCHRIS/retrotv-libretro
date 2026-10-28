@@ -99,7 +99,17 @@ int main(void)
   remote_parse("GET /set?screen2=maybe HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_BAD);
   remote_parse("GET /settings HTTP/1.1\r\n", &c);
-  CHECK(c.kind == RC_SETTINGS);
+  CHECK(c.kind == RC_SETTINGS && c.screen == 0);
+  remote_parse("GET /settings?screen=2 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SETTINGS && c.screen == 2);
+  remote_parse("GET /settings?screen=3 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
+  remote_parse("GET /set?picture=zoom&leveller=off&screen=2 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SET && c.screen == 2 && c.picture == 1 && c.leveller == 0);
+  remote_parse("GET /set?picture=fit HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_SET && c.screen == 0);
+  remote_parse("GET /set?screen=1 HTTP/1.1\r\n", &c);           /* a screen but no setting */
+  CHECK(c.kind == RC_BAD);
   remote_parse("GET /set?sleep=30&audio=2&leveller=Loud&picture=zoom&output=240 HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_SET && c.sleep == 30 && c.audio == 2 && c.leveller == 2 && c.picture == 1 && c.output == 1);
   remote_parse("GET /set?sleep=0 HTTP/1.1\r\n", &c);
