@@ -92,6 +92,14 @@ int main(void)
   CHECK(c.kind == RC_BAD);
   remote_parse("GET /focus?screen=2 HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_FOCUS && c.screen == 2);
+  remote_parse("GET /pause HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_PAUSE && c.screen == 0);
+  remote_parse("GET /play?screen=2 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_PLAY && c.screen == 2);
+  remote_parse("GET /live/ HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_LIVE);
+  remote_parse("GET /pause?screen=9 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_BAD);
   remote_parse("GET /focus HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_BAD);
   remote_parse("GET /set?screen2=on HTTP/1.1\r\n", &c);

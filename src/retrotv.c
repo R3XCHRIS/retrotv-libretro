@@ -96,7 +96,7 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
-enum { QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+enum { QM_PAUSE, QM_LIVE, QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
 static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Output in single mode, Screen 2 / Swap in dual mode */
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
@@ -164,11 +164,12 @@ static char state_dir[1024];       /* where the core keeps its small files */
 /* Remote control: the server thread resolves a request and leaves it here;
  * retro_run applies it. It reads chans (fixed while it runs) and the two
  * published values below, never the UI state. */
-enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST, RQ_FOCUS };
+enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST, RQ_FOCUS, RQ_PAUSE, RQ_LIVE };   /* RQ_PAUSE: channel field 0 play, 1 pause */
 static atomic_int remote_req;          /* kind | screen << 3 (0 focused, 1, 2) | channel index << 5; 0 = nothing */
 static atomic_int pub_cur = -1;        /* channel on the focused screen, for /status */
 static atomic_int pub_dual, pub_s2on, pub_focus;       /* two screens: mode, screen 2 on, focused screen (0/1) */
 static atomic_int pub_cur2 = -1, pub_state2;           /* the other screen's channel and state */
+static atomic_int pub_paused, pub_behind, pub_paused2, pub_behind2;   /* pause: held?, seconds behind live */
 enum { PS_TUNING, PS_PLAYING, PS_NO_SIGNAL, PS_OFF, PS_TESTCARD, PS_NO_CHANNELS };
 static atomic_int pub_state = PS_NO_CHANNELS;
 static int remote_mode;                /* what the server runs as: opts.remote values */
@@ -288,6 +289,14 @@ static void clip_copy(char *dst, size_t n, const char *src, size_t maxchars)
 
 static void hhmm(time_t t, char *out, size_t n) { epg_clock(t, opts.clock24, 0, out, n); }
 
+/* 3:05, or 1:02:03 */
+static void mmss(double secs, char *out, size_t n)
+{
+  int t = secs > 0 ? (int)secs : 0;
+  if (t >= 3600) snprintf(out, n, "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
+  else snprintf(out, n, "%d:%02d", t / 60, t % 60);
+}
+
 static void draw_banner(osd_surface *s, player_state st)
 {
   const m3u_channel *c = &chans.ch[cur];
@@ -305,7 +314,9 @@ static void draw_banner(osd_surface *s, player_state st)
   double frac = -1;
   pthread_mutex_lock(&guide_mu);
   const epg_prog *pn, *px;
-  time_t tnow = time(NULL);
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  time_t tnow = time(NULL) - (time_t)sh.behind;     /* paused earlier: what's on at the moment you're watching */
   epg_now_next(guide_chan(guide, c), tnow, &pn, &px);
   if (pn) {
     epg_ascii(pn->title, now_t, sizeof(now_t));
@@ -337,6 +348,12 @@ static void draw_banner(osd_surface *s, player_state st)
   char clk[12];
   epg_clock(tt, opts.clock24, 1, clk, sizeof(clk));
   osd_text_shadow(s, bx + bw - osd_text_width(clk, 2) - 14, by + 18, clk, 2, TH->text);
+  if (sh.behind >= 1) {
+    char b[16], t[32];
+    mmss(sh.behind, b, sizeof(b));
+    snprintf(t, sizeof(t), "-%s BEHIND LIVE", b);
+    osd_text(s, bx + bw - osd_text_width(t, 1) - 14, by + 42, t, 1, TH->accent);
+  }
   if (dual && screen2_on && gside == focus_side) {   /* the screen you hear: a little speaker */
     int sx = bx + bw - osd_text_width(clk, 2) - 14 - 34, sy = by + 18;
     osd_fill(s, sx, sy + 5, 5, 6, TH->accent, 255);
@@ -479,12 +496,13 @@ static void draw_welcome(osd_surface *s)
     { "UP / DOWN", "change channel" }, { "A", "what's on (banner)" }, { "B", "last channel" },
     { "Y", "zoom / fit picture" }, { "X", "menu: sleep, audio, leveller, test card" }, { "START", "TV guide" },
     { "SELECT", "channel list (left/right: a page)" },
+    { "R2 / L2", "pause, play / back to live" },
     { "LEFT/RIGHT", "screen 1 / screen 2 (sound follows)" },
   };
-  int n = dual ? 8 : 7, more = dual ? 22 : 0;        /* the last row only with two screens */
+  int n = dual ? 9 : 8, more = dual ? 22 : 0;        /* the last row only with two screens */
   for (int i = 0; i < n; i++) {
-    osd_text_shadow(s, x + 24, y + 52 + i * 30, rows[i][0], 2, TH->accent);
-    osd_text(s, x + 200, y + 56 + i * 30, rows[i][1], 1, TH->text);
+    osd_text_shadow(s, x + 24, y + 52 + i * 26, rows[i][0], 2, TH->accent);
+    osd_text(s, x + 200, y + 56 + i * 26, rows[i][1], 1, TH->text);
   }
   osd_text(s, x + 24, y + 270 + more, "Settings: ReplayOS menu > System Settings", 1, TH->sub);
   osd_text_shadow(s, x + 24, y + 298 + more / 2 + 4, "Press A to start watching", 2, TH->text);
@@ -920,6 +938,19 @@ static void show_toast(const char *t)
   toast_until = t_now() + TOAST_SECONDS;
 }
 
+/* paused: like a VCR, top right, with how long it can stay paused */
+static void draw_paused(osd_surface *s, const player_shift *sh)
+{
+  const char *big = "II PAUSED";
+  int x = PLAYER_W - 48 - osd_text_width(big, 3);
+  osd_text_shadow(s, x, 40, big, 3, OSD_RGB(80, 255, 80));
+  char t[16], line[64];
+  mmss(sh->paused_for, t, sizeof(t));
+  if (sh->room >= 0) snprintf(line, sizeof(line), "%s  -  up to %d min more", t, (int)(sh->room / 60));
+  else snprintf(line, sizeof(line), "%s", t);
+  osd_text_shadow(s, PLAYER_W - 48 - osd_text_width(line, 1), 72, line, 1, OSD_RGB(80, 255, 80));
+}
+
 /* Ask the frontend for 50 Hz on 25/50 fps channels and 60 Hz otherwise. */
 static void follow_refresh(double fps)
 {
@@ -1013,10 +1044,51 @@ static void step_leveller(int dir)
   set_leveller(order[(i + dir + 3) % 3]);
 }
 
+/* pause (timeshift) the screen in the globals; on: 1 pause, 0 play */
+static void set_pause(int on)
+{
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  if (on == sh.paused) return;
+  if (on && player_get_state(pl) != PLAYER_PLAYING) return;
+  player_pause(pl, on);
+  char b[16], t[24];
+  mmss(sh.behind, b, sizeof(b));
+  if (on) logf_(RETRO_LOG_INFO, "%spause ch %s", stag(), chans.ch[cur].number);
+  else logf_(RETRO_LOG_INFO, "%splay ch %s, %s behind live", stag(), chans.ch[cur].number, b);
+  snprintf(t, sizeof(t), "PLAY -%s", b);
+  if (!on && gside == focus_side) show_toast(t);
+}
+
+/* back to live: a fresh tune drops what was kept */
+static void go_live(void)
+{
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  if (!sh.paused && sh.behind < 1) return;
+  logf_(RETRO_LOG_INFO, "%sback to live", stag());
+  tune(cur);
+  if (gside == focus_side) show_toast("LIVE");
+}
+
+/* the memory for paused channels is full: play on from where it is */
+static void shift_tick(void)
+{
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  if (!sh.paused || !sh.full) return;
+  logf_(RETRO_LOG_WARN, "%spause memory full after %.0f s: playing", stag(), sh.paused_for);
+  player_pause(pl, 0);
+  if (gside == focus_side) show_toast("BUFFER FULL");
+}
+
 static void qm_build(void)
 {
   qm_n = 0;
+  player_shift sh;
+  player_get_shift(pl, &sh);
   for (int r = 0; r < QM_ROWS; r++) {
+    if (r == QM_LIVE && !sh.paused && sh.behind < 1) continue;
     if (r == QM_OUTPUT && dual) continue;             /* two screens: System Settings, at start */
     if (r == QM_SCREEN2 && !dual) continue;
     if (r == QM_SWAP && !(dual && screen2_on)) continue;
@@ -1039,7 +1111,19 @@ static void draw_qmenu(osd_surface *s)
     char val[32] = "";
     int ry = y + 38 + i * rh, dim = 0;
     const char *label = "";
+    player_shift sh;
+    player_get_shift(pl, &sh);
     switch (r) {
+    case QM_PAUSE: {
+      char b[16];
+      label = "Pause";
+      mmss(sh.paused ? sh.paused_for : sh.behind, b, sizeof(b));
+      if (sh.paused) snprintf(val, sizeof(val), "Paused %s", b);
+      else if (sh.behind >= 1) snprintf(val, sizeof(val), "Playing -%s", b);
+      else snprintf(val, sizeof(val), "Live");
+      break;
+    }
+    case QM_LIVE: label = "Back to live"; break;
     case QM_SLEEP:
       label = "Sleep";
       if (sleep_min) snprintf(val, sizeof(val), "%d min", sleep_min); else snprintf(val, sizeof(val), "Off");
@@ -1273,6 +1357,10 @@ static void other_frame(void)
     else osd_static(&s2, &noise2);
   }
   if (st != PLAYER_PLAYING || t_now() < banner_until) draw_banner(&s2, st);
+  shift_tick();
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  if (sh.paused) draw_paused(&s2, &sh);
   exchange();
 }
 
@@ -1284,11 +1372,12 @@ static const char REMOTE_HELP[] =
   "  /tune?ch=36           tune channel 36 (its number in the playlist)\n"
   "  /tune?name=star+trek  tune by name (first match)\n"
   "  /up  /down  /last     channel up, down, previous\n"
+  "  /pause  /play  /live  pause (up to ~15 min), play on, back to live\n"
   "  /status               what's on (JSON)\n"
   "  /channels             every channel with Now/Next, logos and posters (JSON)\n"
   "  /settings             sleep timer, audio track, leveller, picture, output (JSON)\n"
   "  /set?sleep=30&audio=2&leveller=loud&picture=zoom&output=240   change any of them\n"
-  "  two screens: add screen=1 or screen=2 to /tune /up /down /last;\n"
+  "  two screens: add screen=1 or screen=2 to /tune /up /down /last /pause /play /live;\n"
   "  /settings?screen=2 and /set?picture=zoom&leveller=loud&screen=2 read and change\n"
   "  that screen's picture, leveller and audio track without moving the focus;\n"
   "  /focus?screen=2 moves the focus (and sound); /set?screen2=on|off\n";
@@ -1330,6 +1419,11 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
   }
   if (c->kind == RC_FOCUS) {
     atomic_store(&remote_req, RQ_FOCUS | c->screen << 3);
+    remote_puts(b, "{\"ok\":true}");
+    return 200;
+  }
+  if (c->kind == RC_PAUSE || c->kind == RC_PLAY || c->kind == RC_LIVE) {
+    atomic_store(&remote_req, (c->kind == RC_LIVE ? RQ_LIVE : RQ_PAUSE) | c->screen << 3 | (c->kind == RC_PAUSE) << 5);
     remote_puts(b, "{\"ok\":true}");
     return 200;
   }
@@ -1443,13 +1537,14 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     remote_puts(b, ",\"name\":");
     remote_json(b, ch->name);
     remote_printf(b, ",\"state\":\"%s\",\"now\":", STATES[st >= 0 && st <= PS_NO_CHANNELS ? st : 0]);
+    int behind = atomic_load(&pub_behind);
     pthread_mutex_lock(&guide_mu);
-    epg_now_next(guide_chan(guide, ch), t, &pn, &px);
+    epg_now_next(guide_chan(guide, ch), t - behind, &pn, &px);   /* paused earlier: what you're watching */
     remote_json(b, pn ? pn->title : NULL);
     remote_puts(b, ",\"next\":");
     remote_json(b, px ? px->title : NULL);
     pthread_mutex_unlock(&guide_mu);
-    remote_printf(b, ",\"channels\":%zu", chans.count);
+    remote_printf(b, ",\"channels\":%zu,\"paused\":%s,\"behind\":%d", chans.count, atomic_load(&pub_paused) ? "true" : "false", behind);
     if (atomic_load(&pub_dual)) {
       int s2on = atomic_load(&pub_s2on), c2 = atomic_load(&pub_cur2), st2 = atomic_load(&pub_state2);
       remote_printf(b, ",\"dual\":true,\"focus\":%d,\"screen2\":{\"on\":%s", atomic_load(&pub_focus) + 1, s2on ? "true" : "false");
@@ -1458,7 +1553,8 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
         remote_json(b, chans.ch[c2].number);
         remote_puts(b, ",\"other_name\":");
         remote_json(b, chans.ch[c2].name);
-        remote_printf(b, ",\"other_state\":\"%s\"", STATES[st2 >= 0 && st2 <= PS_NO_CHANNELS ? st2 : 0]);
+        remote_printf(b, ",\"other_state\":\"%s\",\"other_paused\":%s,\"other_behind\":%d", STATES[st2 >= 0 && st2 <= PS_NO_CHANNELS ? st2 : 0],
+                      atomic_load(&pub_paused2) ? "true" : "false", atomic_load(&pub_behind2));
       }
       remote_puts(b, "}");
     }
@@ -1564,6 +1660,15 @@ static void remote_apply(void)
   int kind = r & 7, target = (r >> 3) & 3;
   size_t idx = (size_t)(r >> 5);
   if (kind == RQ_FOCUS) { if (!asleep) set_focus(target - 1); return; }
+  if (kind == RQ_PAUSE || kind == RQ_LIVE) {         /* the picture on screen: no waking, no clearing */
+    int side = target ? target - 1 : focus_side;
+    if (asleep || testcard_on || (side != focus_side && !(dual && screen2_on))) return;
+    int away = side != focus_side;
+    if (away) exchange();
+    if (kind == RQ_LIVE) go_live(); else set_pause(idx == 1);
+    if (away) exchange();
+    return;
+  }
   int side = target ? target - 1 : focus_side;
   if (side != focus_side && !(dual && screen2_on)) return;
   /* wake the set and clear the screen, as if the viewer picked up the remote */
@@ -1600,6 +1705,14 @@ static void publish_state(void)
     atomic_store(&pub_state2, asleep ? PS_OFF : ps == PLAYER_PLAYING ? PS_PLAYING : ps == PLAYER_ERROR ? PS_NO_SIGNAL : PS_TUNING);
     atomic_store(&pub_cur2, (int)other.cur);
   } else atomic_store(&pub_cur2, -1);
+  player_shift sh;
+  player_get_shift(pl, &sh);
+  atomic_store(&pub_paused, sh.paused);
+  atomic_store(&pub_behind, (int)sh.behind);
+  if (dual && screen2_on && other.pl) player_get_shift(other.pl, &sh);
+  else memset(&sh, 0, sizeof(sh));
+  atomic_store(&pub_paused2, sh.paused);
+  atomic_store(&pub_behind2, (int)sh.behind);
   if (frame_no % 15) return;                         /* settings: 4 times a second is plenty */
   remote_snap v = { 0 };
   v.sleep_min = sleep_min;
@@ -1637,7 +1750,7 @@ static uint16_t read_pad(void)
     RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L,
     RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_X,
     RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
-    RETRO_DEVICE_ID_JOYPAD_Y,
+    RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2,
   };
   /* any controller works the TV, like any remote in the house: players 1-4
    * (e.g. a second pad, or a virtual pad such as Zaparoo's on player 2) */
@@ -1687,6 +1800,8 @@ static void handle_input(void)
     if (PRESSED(DOWN)) qm_sel = (qm_sel + 1) % qm_n;
     int row = qm_rows[qm_sel];
     int dir = PRESSED(LEFT) ? -1 : PRESSED(RIGHT) ? 1 : FACE(PAD_A) ? 1 : 0;
+    if (dir && row == QM_PAUSE) { player_shift sh; player_get_shift(pl, &sh); set_pause(!sh.paused); }
+    if (FACE(PAD_A) && row == QM_LIVE) { go_live(); qm_open = 0; }
     if (dir && row == QM_SLEEP) step_sleep(dir);
     if (dir && row == QM_AUDIO) step_audio(dir);
     if (dir && row == QM_LEVEL) step_leveller(dir);
@@ -1734,6 +1849,8 @@ static void handle_input(void)
     gv.top = cur > 2 ? cur - 2 : 0;                  /* a little context above */
     guide_scroll(&gv, chans.count);
   }
+  if (PRESSED(R2)) { player_shift sh; player_get_shift(pl, &sh); set_pause(!sh.paused); }
+  if (PRESSED(L2)) go_live();
   if (FACE(PAD_Y)) {
     set_zoom(!zoom);
     logf_(RETRO_LOG_INFO, "aspect %s", zoom ? "zoom" : "fit");
@@ -1972,6 +2089,7 @@ RETRO_API void retro_run(void)
   player_state st = player_get_state(pl);
   player_audio(pl, abuf, aframes(), 1.0 / fps_out);
   if (opts.leveller) loud_process(&loud, abuf, aframes(), PLAYER_RATE);   /* even out channel loudness */
+  shift_tick();
   st = player_get_state(pl);
   screen_status(st);
   other_frame();
@@ -2020,6 +2138,11 @@ RETRO_API void retro_run(void)
   } else if (list_open) draw_list(&s);
   else if (show_banner) draw_banner(&s, st);
 
+  {
+    player_shift sh;
+    player_get_shift(pl, &sh);
+    if (sh.paused && !welcome_on && !qm_open && !guide_open && !list_open) draw_paused(&s, &sh);
+  }
   if (t_now() < toast_until) draw_toast(&s);
   if (dual && t_now() < focus_flash_until) draw_focus_flash(&s);
 

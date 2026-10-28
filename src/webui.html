@@ -99,6 +99,10 @@ footer { color: var(--muted); font: 12px var(--mono); text-align: center; margin
     <button id="up" aria-label="Channel up">CH &#9650;</button>
     <button id="gear" aria-label="Settings" aria-expanded="false" aria-controls="settings">&#9881;</button>
   </div>
+  <div class="focus" id="shift">
+    <button id="pp" aria-label="Pause">&#10074;&#10074; PAUSE</button>
+    <button id="live" aria-label="Back to live">LIVE</button>
+  </div>
   <div class="focus" id="focus" hidden>
     <button id="f1" aria-label="Control screen 1">SCREEN 1</button>
     <button id="f2" aria-label="Control screen 2">SCREEN 2</button>
@@ -251,6 +255,11 @@ async function refresh() {
     const two = s.dual && s.screen2 && s.screen2.on;   /* focus switch while both screens play */
     $("focus").hidden = !two;
     if (two) { $("f1").className = s.focus === 1 ? "on" : ""; $("f2").className = s.focus === 2 ? "on" : ""; }
+    $("pp").innerHTML = s.paused ? "&#9654; PLAY" : "&#10074;&#10074; PAUSE";
+    $("pp").setAttribute("aria-label", s.paused ? "Play" : "Pause");
+    $("pp").dataset.paused = s.paused ? "1" : "";
+    $("live").textContent = s.behind > 0 ? "LIVE (-" + Math.floor(s.behind / 60) + ":" + String(s.behind % 60).padStart(2, "0") + ")" : "LIVE";
+    $("live").className = s.behind > 0 ? "on" : "";
     if (s.ch !== current) { current = s.ch; render(); loadSettings(); }
     showMsg("");
   } catch (e) {
@@ -317,6 +326,8 @@ $("f2").onclick = () => tune("/focus?screen=2");
 $("up").onclick = () => tune("/up");
 $("down").onclick = () => tune("/down");
 $("last").onclick = () => tune("/last");
+$("pp").onclick = () => tune($("pp").dataset.paused ? "/play" : "/pause");
+$("live").onclick = () => tune("/live");
 $("find").oninput = e => { filter = e.target.value; render(); };
 
 loadChannels().then(refresh);
