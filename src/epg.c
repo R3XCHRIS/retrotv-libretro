@@ -310,7 +310,7 @@ epg *epg_parse(const char *xml, time_t from, time_t to)
     n++;
     p = end;
   }
-  qsort(it, n, sizeof(*it), cmp_item);
+  if (n) qsort(it, n, sizeof(*it), cmp_item);       /* it is NULL when no programmes matched */
   for (size_t i = 0; i < n;) {                      /* group into channels */
     size_t j = i;
     while (j < n && !strcmp(it[j].chan, it[i].chan)) j++;
