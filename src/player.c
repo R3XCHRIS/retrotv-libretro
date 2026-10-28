@@ -19,8 +19,20 @@
 #define PREBUFFER_AUDIO 0.30                  /* seconds before PLAYING */
 #define BUFFER_TIMEOUT 4.0                    /* give up waiting for A+V sync */
 #define OPEN_ATTEMPTS 3                       /* cold IPTV channels sometimes fail once */
+/* Pause (timeshift): a reader thread keeps receiving while the picture is
+ * held, so the packets wait in memory. One budget for every stream: 1 GiB is
+ * ~15 minutes of a 10 Mbit/s channel. Never paused, a stream reads only a
+ * little ahead and the decoder sets the pace, as before. */
+#ifndef SHIFT_MAX
+#define SHIFT_MAX ((int64_t)1 << 30)          /* tests build with a small one */
+#endif
+#define SHIFT_SLACK (SHIFT_MAX / 20)           /* "full" this early: input and output rates drift a little */
+#define SHIFT_IDLE ((int64_t)8 << 20)
 
 typedef struct { uint32_t *px; double pts; } vslot;
+typedef struct pktnode { AVPacket *pkt; int64_t bytes; struct pktnode *next; } pktnode;
+
+static atomic_llong shift_total;              /* bytes waiting in every stream's packet queue */
 typedef struct { uint64_t pos; double pts; } anchor;
 
 /* One tune: its own decode thread and buffers. The player swaps streams on a
@@ -62,6 +74,24 @@ struct stream {
   int have_shown;
   player_stats stats;
 
+  /* received packets: the reader thread fills the queue, the decode thread empties it */
+  AVFormatContext *fmt;         /* the reader's once it runs */
+  int vi, ai;
+  pthread_t reader;
+  atomic_int rstop;             /* the decode thread is done: stop reading */
+  pthread_mutex_t qmu;
+  pthread_cond_t qcv;
+  pktnode *qhead, *qtail;       /* under qmu */
+  int64_t qbytes;
+  int qend, qend_rc;            /* the reader stopped: end of stream or an error */
+  atomic_llong rx_bytes;        /* received since the tune */
+
+  /* pause: the consumer side stops; packets keep arriving */
+  atomic_int paused;
+  atomic_int shifted;           /* paused at least once: the reader keeps up with live */
+  double pause_start, behind;   /* libretro thread */
+  long long rx_at_pause;
+
   /* audio ring */
   int16_t *aq;
   uint64_t awrite, aread;       /* total frames written / read */
@@ -89,7 +119,107 @@ static void set_error(stream *p, const char *what, int code)
   atomic_store(&p->state, PLAYER_ERROR);
 }
 
-static int interrupt_cb(void *opaque) { return atomic_load(&((stream *)opaque)->abort); }
+static int interrupt_cb(void *opaque)
+{
+  stream *p = opaque;
+  return atomic_load(&p->abort) || atomic_load(&p->rstop);
+}
+
+static void timed_wait(pthread_cond_t *cv, pthread_mutex_t *mu, long ms)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_nsec += ms * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+  pthread_cond_timedwait(cv, mu, &ts);
+}
+
+/* ---------- received packets (timeshift queue) ---------- */
+
+static int queue_room(stream *p)
+{
+  if (atomic_load(&shift_total) >= SHIFT_MAX) return 0;
+  return atomic_load(&p->shifted) || p->qbytes < SHIFT_IDLE;
+}
+
+/* the reader: receive packets as they come, into the queue */
+static void *reader_main(void *arg)
+{
+  stream *p = arg;
+#ifdef __linux__
+  pthread_setname_np(pthread_self(), "retrotv-rx");
+#endif
+  AVPacket *pkt = p_av_packet_alloc();
+  int rc = pkt ? 0 : AVERROR(ENOMEM);
+  while (pkt && !atomic_load(&p->abort) && !atomic_load(&p->rstop)) {
+    pthread_mutex_lock(&p->qmu);
+    int room = queue_room(p);
+    if (!room) timed_wait(&p->qcv, &p->qmu, 50);
+    pthread_mutex_unlock(&p->qmu);
+    if (!room) continue;
+    rc = p_av_read_frame(p->fmt, pkt);
+    if (rc < 0) break;
+    if (pkt->stream_index != p->vi && pkt->stream_index != p->ai) { p_av_packet_unref(pkt); continue; }
+    pktnode *n = malloc(sizeof(*n));
+    AVPacket *q = p_av_packet_alloc();
+    if (!n || !q) { free(n); p_av_packet_free(&q); p_av_packet_unref(pkt); rc = AVERROR(ENOMEM); break; }
+    p_av_packet_move_ref(q, pkt);
+    *n = (pktnode){ q, (int64_t)q->size + (int64_t)(sizeof(pktnode) + sizeof(AVPacket) + 64), NULL };
+    atomic_fetch_add(&shift_total, n->bytes);
+    atomic_fetch_add(&p->rx_bytes, n->bytes);
+    pthread_mutex_lock(&p->qmu);
+    if (p->qtail) p->qtail->next = n; else p->qhead = n;
+    p->qtail = n;
+    p->qbytes += n->bytes;
+    pthread_cond_broadcast(&p->qcv);
+    pthread_mutex_unlock(&p->qmu);
+  }
+  p_av_packet_free(&pkt);
+  pthread_mutex_lock(&p->qmu);
+  p->qend = 1;
+  p->qend_rc = rc;
+  pthread_cond_broadcast(&p->qcv);
+  pthread_mutex_unlock(&p->qmu);
+  return NULL;
+}
+
+/* the next packet into pkt: 0, 1 when the reader stopped (its code in *end_rc), -1 aborted */
+static int queue_pop(stream *p, AVPacket *pkt, int *end_rc)
+{
+  pthread_mutex_lock(&p->qmu);
+  while (!p->qhead) {
+    if (atomic_load(&p->abort)) { pthread_mutex_unlock(&p->qmu); return -1; }
+    if (p->qend) { *end_rc = p->qend_rc; pthread_mutex_unlock(&p->qmu); return 1; }
+    timed_wait(&p->qcv, &p->qmu, 50);
+  }
+  pktnode *n = p->qhead;
+  p->qhead = n->next;
+  if (!p->qhead) p->qtail = NULL;
+  p->qbytes -= n->bytes;
+  pthread_cond_broadcast(&p->qcv);
+  pthread_mutex_unlock(&p->qmu);
+  atomic_fetch_sub(&shift_total, n->bytes);
+  p_av_packet_move_ref(pkt, n->pkt);
+  p_av_packet_free(&n->pkt);
+  free(n);
+  return atomic_load(&p->abort) ? -1 : 0;
+}
+
+static void queue_clear(stream *p)
+{
+  pthread_mutex_lock(&p->qmu);
+  pktnode *n = p->qhead;
+  p->qhead = p->qtail = NULL;
+  p->qbytes = 0;
+  pthread_mutex_unlock(&p->qmu);
+  while (n) {
+    pktnode *next = n->next;
+    atomic_fetch_sub(&shift_total, n->bytes);
+    p_av_packet_free(&n->pkt);
+    free(n);
+    n = next;
+  }
+}
 
 /* ---------- producer side (thread) ---------- */
 
@@ -201,7 +331,7 @@ static void *thread_main(void *arg)
   AVFrame *fr = NULL;
   AVDictionary *opts = NULL;
   int16_t *abuf = NULL;
-  int abuf_cap = 0, vi = -1, ai = -1, rc;
+  int abuf_cap = 0, vi = -1, ai = -1, rc, reading = 0;
 
   for (int attempt = 1;; attempt++) {
     const char *what;
@@ -297,11 +427,19 @@ static void *thread_main(void *arg)
   pkt = p_av_packet_alloc();
   fr = p_av_frame_alloc();
   if (!pkt || !fr) { set_error(p, "out of memory", 0); goto done; }
+  p->fmt = fmt;
+  p->vi = vi;
+  p->ai = ai;
+  if (pthread_create(&p->reader, NULL, reader_main, p)) { set_error(p, "could not start reader thread", 0); goto done; }
+  reading = 1;
   atomic_store(&p->state, PLAYER_BUFFERING);
 
   while (!atomic_load(&p->abort)) {
-    rc = p_av_read_frame(fmt, pkt);
-    if (rc < 0) {
+    int end_rc = 0;
+    rc = queue_pop(p, pkt, &end_rc);
+    if (rc < 0) break;
+    if (rc > 0) {                                     /* played everything received */
+      rc = end_rc;
       if (!atomic_load(&p->abort)) set_error(p, rc == AVERROR_EOF ? "stream ended" : "stream lost", rc == AVERROR_EOF ? 0 : rc);
       break;
     }
@@ -380,6 +518,14 @@ static void *thread_main(void *arg)
   }
 
 done:
+  if (reading) {                                      /* stop the reader before its demuxer goes */
+    atomic_store(&p->rstop, 1);
+    pthread_mutex_lock(&p->qmu);
+    pthread_cond_broadcast(&p->qcv);
+    pthread_mutex_unlock(&p->qmu);
+    pthread_join(p->reader, NULL);
+  }
+  queue_clear(p);
   if (fr) p_av_frame_free(&fr);
   if (pkt) p_av_packet_free(&pkt);
   if (swr) p_swr_free(&swr);
@@ -403,6 +549,8 @@ static stream *stream_create(atomic_int *zoom, atomic_int *margin)
   if (!p) return NULL;
   pthread_mutex_init(&p->mu, NULL);
   pthread_cond_init(&p->cv, NULL);
+  pthread_mutex_init(&p->qmu, NULL);
+  pthread_cond_init(&p->qcv, NULL);
   p->aq = calloc((size_t)AQ_FRAMES * 2, sizeof(int16_t));
   p->shown = calloc((size_t)PLAYER_W * PLAYER_H, 4);
   for (int i = 0; i < VQ; i++) p->vq[i].px = calloc((size_t)PLAYER_W * PLAYER_H, 4);
@@ -424,6 +572,8 @@ static void stream_free(stream *p)
   free(p->url);
   pthread_cond_destroy(&p->cv);
   pthread_mutex_destroy(&p->mu);
+  pthread_cond_destroy(&p->qcv);
+  pthread_mutex_destroy(&p->qmu);
   free(p);
 }
 
@@ -448,6 +598,12 @@ static void reset_buffers(stream *p)
   vsmooth_reset(&p->vsm);
   p->ngaps = 0;
   p->last_raw_vpts = NAN;
+  atomic_store(&p->rstop, 0);
+  p->qend = p->qend_rc = 0;
+  atomic_store(&p->rx_bytes, 0);
+  atomic_store(&p->paused, 0);
+  atomic_store(&p->shifted, 0);
+  p->behind = 0;
 }
 
 static int stream_open(stream *p, const char *url, int want_audio)
@@ -520,6 +676,7 @@ static void stream_audio(stream *p, int16_t *out, size_t frames, double frame_se
   memset(out, 0, frames * 2 * sizeof(int16_t));
   int st = atomic_load(&p->state);
   if (st != PLAYER_BUFFERING && st != PLAYER_PLAYING) return;
+  if (atomic_load(&p->paused)) return;               /* held: the clock stands still */
 
   pthread_mutex_lock(&p->mu);
   uint64_t avail = p->awrite - p->aread;
@@ -563,7 +720,7 @@ static int stream_video(stream *p, uint32_t *dst)
   pthread_mutex_lock(&p->mu);
   int st = atomic_load(&p->state);
   int advanced = 0;
-  if (st == PLAYER_PLAYING) {
+  if (st == PLAYER_PLAYING && !atomic_load(&p->paused)) {
     while (p->vcount > 0) {
       vslot *head = &p->vq[p->vhead];
       if (isnan(p->first_vpts) && !isnan(head->pts)) {
@@ -595,6 +752,41 @@ static int stream_video(stream *p, uint32_t *dst)
   pthread_cond_broadcast(&p->cv);
   pthread_mutex_unlock(&p->mu);
   return have;
+}
+
+static void stream_pause(stream *p, int on)
+{
+  if (on == atomic_load(&p->paused)) return;
+  if (on) {
+    if (atomic_load(&p->state) != PLAYER_PLAYING) return;
+    atomic_store(&p->shifted, 1);
+    p->pause_start = now_mono();
+    p->rx_at_pause = atomic_load(&p->rx_bytes);
+    atomic_store(&p->paused, 1);
+    return;
+  }
+  double d = now_mono() - p->pause_start;
+  p->behind += d;
+  pthread_mutex_lock(&p->mu);
+  p->play_start_mono += d;                           /* streams without audio keep their place too */
+  pthread_mutex_unlock(&p->mu);
+  atomic_store(&p->paused, 0);
+}
+
+static void stream_get_shift(stream *p, player_shift *s)
+{
+  memset(s, 0, sizeof(*s));
+  s->room = -1;
+  int64_t total = atomic_load(&shift_total);
+  s->full = total >= SHIFT_MAX - SHIFT_SLACK;
+  s->behind = p->behind;
+  if (!atomic_load(&p->paused) || atomic_load(&p->state) != PLAYER_PLAYING) return;
+  s->paused = 1;
+  s->paused_for = now_mono() - p->pause_start;
+  s->behind += s->paused_for;
+  double rate = s->paused_for >= 3 ? (double)(atomic_load(&p->rx_bytes) - p->rx_at_pause) / s->paused_for : 0;
+  if (rate > 0) s->room = (double)(SHIFT_MAX - SHIFT_SLACK - total) / rate;
+  if (s->room < 0 && rate > 0) s->room = 0;
 }
 
 /* ---------- player: the current stream, old ones closed in the background ---------- */
@@ -725,3 +917,11 @@ void player_audio(player *pl, int16_t *out, size_t frames, double frame_seconds)
 }
 
 int player_video(player *pl, uint32_t *dst) { return pl->cur ? stream_video(pl->cur, dst) : 0; }
+
+void player_pause(player *pl, int on) { if (pl->cur) stream_pause(pl->cur, on ? 1 : 0); }
+
+void player_get_shift(player *pl, player_shift *s)
+{
+  if (pl->cur) stream_get_shift(pl->cur, s);
+  else { memset(s, 0, sizeof(*s)); s->room = -1; }
+}
