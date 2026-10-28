@@ -121,7 +121,7 @@ static int logged_playing, logged_error, logged_attempt;
 typedef struct {
   player *pl;
   size_t cur, prev;
-  int zoom;
+  int zoom, leveller;                  /* leveller: opts.leveller while it has the focus */
   double banner_until, played_at;
   int logged_playing, logged_error, logged_attempt;
   int saved_idx;
@@ -175,14 +175,18 @@ static int remote_mode;                /* what the server runs as: opts.remote v
 /* Settings from the phone page: retro_run publishes a snapshot for the server
  * thread, which leaves requested changes in rset for retro_run to apply. */
 typedef struct {
-  int sleep_min, sleep_left;           /* timer setting and minutes left (0 = off) */
-  int leveller, zoom, res240;
+  int leveller, zoom;
   int audio_cur, naudio;
   char audio_lang[8][8];
+} picture_snap;
+typedef struct {
+  int sleep_min, sleep_left;           /* timer setting and minutes left (0 = off) */
+  int res240, focus;                   /* focus: physical screen 0/1 */
+  picture_snap pic[2];                 /* per physical screen; [1] only with two screens */
 } remote_snap;
 static pthread_mutex_t remote_mu = PTHREAD_MUTEX_INITIALIZER;
 static remote_snap pubset;             /* under remote_mu */
-static remote_cmd rset;                /* under remote_mu: kind RC_SET when something waits */
+static remote_cmd rset[3];             /* under remote_mu, by screen= (0 focused, 1, 2): kind RC_SET when something waits */
 
 /* ---------- helpers ---------- */
 
@@ -833,6 +837,9 @@ static void exchange(void);
 static void show_toast(const char *t);
 static void remote_update(void);
 
+/* the leveller's target for the screen in the globals */
+static void loud_target(void) { loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB; }
+
 static int saved_leveller = -1, saved_res240 = -1;  /* last values from System Settings */
 
 /* Read the frontend's options. The X menu can change the leveller and the
@@ -842,12 +849,15 @@ static void apply_options(void)
   int lev = opts.leveller, r240 = opts.res240;
   options_read(&opts, env_cb);
   if (saved_leveller >= 0 && opts.leveller == saved_leveller) opts.leveller = lev;
-  else saved_leveller = opts.leveller;
+  else {                                             /* changed in System Settings: both screens */
+    if (saved_leveller >= 0) other.leveller = opts.leveller;
+    saved_leveller = opts.leveller;
+  }
   if (saved_res240 >= 0 && opts.res240 == saved_res240) opts.res240 = r240;
   else saved_res240 = opts.res240;
   if (!pl) dual = opts.dual;                         /* dual mode is fixed for the session */
   if (!pl) res240 = opts.res240;                     /* in dual mode too: fixed for the session */                     /* at load the frontend asks for the size next */
-  loud.target_db = opts.leveller == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
+  loud_target();
   theme_set(opts.theme);
   if (pl) player_set_margin(pl, opts.overscan);
   gv.clock24 = opts.clock24;
@@ -954,12 +964,18 @@ static void step_sleep(int dir)
   set_sleep(SLEEP_STEPS[(i + dir + n) % n]);
 }
 
-static void set_zoom(int z)
+/* zoom for the screen in the globals (kept per channel when remembered) */
+static void zoom_here(int z)
 {
   zoom = z;
   player_set_zoom(pl, zoom);
-  show_toast(zoom ? "ZOOM" : "FIT");
   if (opts.zoom_remember && !chanpref_set(&zprefs, &chans.ch[cur], zoom)) zoom_save = 1;
+}
+
+static void set_zoom(int z)
+{
+  zoom_here(z);
+  show_toast(zoom ? "ZOOM" : "FIT");
 }
 
 static void step_audio(int dir)
@@ -981,7 +997,7 @@ static const char *const LEVELLER_NAMES[3] = { "Off", "Normal", "Loud" };
 static void set_leveller(int v)
 {
   opts.leveller = v;
-  loud.target_db = v == 2 ? LOUD_TARGET_LOUD_DB : LOUD_TARGET_DB;
+  loud_target();
   if (v) loud_reset(&loud);                          /* re-settle from unity, quickly */
   char t[24];
   snprintf(t, sizeof(t), "LEVELLER %s", v == 2 ? "LOUD" : v ? "NORMAL" : "OFF");
@@ -1084,15 +1100,19 @@ static double sleep_level(void)
  * with its physical screen (used by Swap screens) */
 static void swap_state(int keep_paths)
 {
-  screen_state g = { pl, cur, prev, zoom, banner_until, played_at, logged_playing, logged_error, logged_attempt, saved_idx, "" };
+  screen_state g = { pl, cur, prev, zoom, opts.leveller, banner_until, played_at, logged_playing, logged_error, logged_attempt,
+                     saved_idx, "" };
   memcpy(g.last_path, last_path, sizeof(g.last_path));
-  pl = other.pl; cur = other.cur; prev = other.prev; zoom = other.zoom;
+  pl = other.pl; cur = other.cur; prev = other.prev; zoom = other.zoom; opts.leveller = other.leveller;
   banner_until = other.banner_until; played_at = other.played_at;
   logged_playing = other.logged_playing; logged_error = other.logged_error; logged_attempt = other.logged_attempt;
   saved_idx = other.saved_idx;
   memcpy(last_path, other.last_path, sizeof(last_path));
   other = g;
-  if (keep_paths) {                                  /* the files stay with their screens */
+  if (keep_paths) {                                  /* the files and levellers stay with their screens */
+    int lv = opts.leveller;
+    opts.leveller = other.leveller;
+    other.leveller = lv;
     char t[sizeof(last_path)];
     memcpy(t, last_path, sizeof(t));
     memcpy(last_path, other.last_path, sizeof(last_path));
@@ -1111,6 +1131,7 @@ static void set_focus(int side)
   qm_open = guide_open = list_open = 0;
   exchange();
   focus_side = gside;
+  loud_target();                                     /* that screen's leveller */
   loud_reset(&loud);                                 /* the other channel's loudness */
   focus_flash_until = t_now() + 1.5;
   banner_until = t_now() + (opts.banner_secs > 0 ? opts.banner_secs : INFO_SECONDS);
@@ -1126,6 +1147,7 @@ static void set_screen2(int on)
     exchange();                                      /* screen 2's state into the globals... */
     focus_side = gside;                              /* ...and it keeps the focus */
     tune(cur);
+    loud_target();
     loud_reset(&loud);
     focus_flash_until = t_now() + 1.5;
     logf_(RETRO_LOG_INFO, "screen 2 on (ch %s)", chans.ch[cur].number);
@@ -1267,6 +1289,8 @@ static const char REMOTE_HELP[] =
   "  /settings             sleep timer, audio track, leveller, picture, output (JSON)\n"
   "  /set?sleep=30&audio=2&leveller=loud&picture=zoom&output=240   change any of them\n"
   "  two screens: add screen=1 or screen=2 to /tune /up /down /last;\n"
+  "  /settings?screen=2 and /set?picture=zoom&leveller=loud&screen=2 read and change\n"
+  "  that screen's picture, leveller and audio track without moving the focus;\n"
   "  /focus?screen=2 moves the focus (and sound); /set?screen2=on|off\n";
 
 /* "now":{"title":..,"start":..,"stop":..},"next":{..} for one channel (guide_mu held) */
@@ -1340,16 +1364,19 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     v = pubset;
     pthread_mutex_unlock(&remote_mu);
     static const char *const LEV[3] = { "off", "normal", "loud" };
+    const picture_snap *ps = &v.pic[c->screen ? c->screen - 1 : v.focus];
     remote_printf(b, "{\"ok\":true,\"sleep\":%d,\"sleep_left\":%d,\"sleep_steps\":[", v.sleep_min, v.sleep_left);
     for (size_t i = 0; i < sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0]); i++) remote_printf(b, "%s%d", i ? "," : "", SLEEP_STEPS[i]);
-    remote_printf(b, "],\"audio\":%d,\"audio_tracks\":[", v.audio_cur + 1);
-    for (int i = 0; i < v.naudio && i < 8; i++) {
+    remote_printf(b, "],\"audio\":%d,\"audio_tracks\":[", ps->audio_cur + 1);
+    for (int i = 0; i < ps->naudio && i < 8; i++) {
       if (i) remote_puts(b, ",");
-      remote_json(b, v.audio_lang[i]);
+      remote_json(b, ps->audio_lang[i]);
     }
-    remote_printf(b, "],\"leveller\":\"%s\",\"picture\":\"%s\",\"output\":\"%s\",\"dual\":%s,\"screen2\":\"%s\",\"focus\":%d}",
-                  LEV[v.leveller >= 0 && v.leveller <= 2 ? v.leveller : 1], v.zoom ? "zoom" : "fit", v.res240 ? "240" : "480",
-                  atomic_load(&pub_dual) ? "true" : "false", atomic_load(&pub_s2on) ? "on" : "off", atomic_load(&pub_focus) + 1);
+    remote_printf(b, "],\"leveller\":\"%s\",\"picture\":\"%s\",\"output\":\"%s\",\"dual\":%s,\"screen2\":\"%s\",\"focus\":%d",
+                  LEV[ps->leveller >= 0 && ps->leveller <= 2 ? ps->leveller : 1], ps->zoom ? "zoom" : "fit", v.res240 ? "240" : "480",
+                  atomic_load(&pub_dual) ? "true" : "false", atomic_load(&pub_s2on) ? "on" : "off", v.focus + 1);
+    if (c->screen) remote_printf(b, ",\"screen\":%d", c->screen);
+    remote_puts(b, "}");
     return 200;
   }
   case RC_SET: {
@@ -1366,24 +1393,26 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
       return 400;
     }
     pthread_mutex_lock(&remote_mu);
-    int naudio = pubset.naudio;
+    int naudio = pubset.pic[c->screen ? c->screen - 1 : pubset.focus].naudio;
     if (c->audio > 0 && c->audio > naudio) {
       pthread_mutex_unlock(&remote_mu);
       remote_printf(b, "{\"ok\":false,\"error\":\"this channel has %d audio track%s\"}", naudio, naudio == 1 ? "" : "s");
       return 400;
     }
-    if (rset.kind != RC_SET) {                       /* merge with anything not applied yet */
-      rset = *c;
+    remote_cmd *r = &rset[c->screen];
+    if (r->kind != RC_SET) {                         /* merge with anything not applied yet */
+      *r = *c;
     } else {
-      if (c->sleep >= 0) rset.sleep = c->sleep;
-      if (c->audio > 0) rset.audio = c->audio;
-      if (c->leveller >= 0) rset.leveller = c->leveller;
-      if (c->picture >= 0) rset.picture = c->picture;
-      if (c->output >= 0) rset.output = c->output;
-      if (c->screen2 >= 0) rset.screen2 = c->screen2;
+      if (c->sleep >= 0) r->sleep = c->sleep;
+      if (c->audio > 0) r->audio = c->audio;
+      if (c->leveller >= 0) r->leveller = c->leveller;
+      if (c->picture >= 0) r->picture = c->picture;
+      if (c->output >= 0) r->output = c->output;
+      if (c->screen2 >= 0) r->screen2 = c->screen2;
     }
     pthread_mutex_unlock(&remote_mu);
-    remote_puts(b, "{\"ok\":true}");
+    if (c->screen) remote_printf(b, "{\"ok\":true,\"screen\":%d}", c->screen);
+    else remote_puts(b, "{\"ok\":true}");
     return 200;
   }
   case RC_TUNE:
@@ -1458,21 +1487,40 @@ static void remote_update(void)
   logf_(RETRO_LOG_INFO, "remote control on %s:%d", opts.remote == 2 ? "all interfaces" : "127.0.0.1", port);
 }
 
-/* a request from the server thread: like a press on the remote */
-static void remote_apply_settings(void)
+/* the screen without the focus: its picture, leveller and audio track change
+ * quietly (no toast on the screen you're watching), the focus and sound stay */
+static void remote_set_away(const remote_cmd *c)
 {
-  remote_cmd c;
-  pthread_mutex_lock(&remote_mu);
-  c = rset;
-  rset.kind = RC_NONE;
-  pthread_mutex_unlock(&remote_mu);
-  if (c.kind != RC_SET) return;
-  logf_(RETRO_LOG_INFO, "remote: settings sleep %d audio %d leveller %d picture %d output %d",
-        c.sleep, c.audio, c.leveller, c.picture, c.output);
+  exchange();
+  if (c->leveller >= 0 && c->leveller != opts.leveller) {
+    opts.leveller = c->leveller;                     /* used when it gets the focus */
+    logf_(RETRO_LOG_INFO, "%svolume leveller %s (this session)", stag(), LEVELLER_NAMES[c->leveller]);
+  }
+  if (chans.count && !asleep && !testcard_on) {
+    if (c->picture >= 0 && c->picture != zoom) zoom_here(c->picture);
+    if (c->audio > 0) {
+      player_info in;
+      player_get_info(pl, &in);
+      if (c->audio <= in.naudio && c->audio - 1 != in.audio_cur) player_open_track(pl, chans.ch[cur].url, c->audio - 1);
+    }
+  }
+  exchange();
+}
+
+/* a request from the server thread: like a press on the remote */
+static void remote_apply_set(remote_cmd c, int target)
+{
+  logf_(RETRO_LOG_INFO, "remote: settings sleep %d audio %d leveller %d picture %d output %d screen %d",
+        c.sleep, c.audio, c.leveller, c.picture, c.output, target);
   if (c.sleep >= 0 && c.sleep != sleep_min && !asleep) set_sleep(c.sleep);
-  if (c.leveller >= 0 && c.leveller != opts.leveller) set_leveller(c.leveller);
   if (c.output >= 0 && c.output != res240) { set_output(c.output); show_toast(res240 ? "240P" : "480"); }
   if (c.screen2 >= 0 && !asleep) set_screen2(c.screen2);
+  int side = target ? target - 1 : focus_side;
+  if (side != focus_side) {
+    if (dual && screen2_on) remote_set_away(&c);
+    return;
+  }
+  if (c.leveller >= 0 && c.leveller != opts.leveller) set_leveller(c.leveller);
   if (!chans.count || asleep || testcard_on) return;
   if (c.picture >= 0 && c.picture != zoom) set_zoom(c.picture);
   if (c.audio > 0) {
@@ -1480,6 +1528,17 @@ static void remote_apply_settings(void)
     player_get_info(pl, &in);
     if (c.audio <= in.naudio && c.audio - 1 != in.audio_cur) step_audio(c.audio - 1 - in.audio_cur);
   }
+}
+
+static void remote_apply_settings(void)
+{
+  remote_cmd c[3];
+  pthread_mutex_lock(&remote_mu);
+  memcpy(c, rset, sizeof(c));
+  for (int k = 0; k < 3; k++) rset[k].kind = RC_NONE;
+  pthread_mutex_unlock(&remote_mu);
+  for (int k = 0; k < 3; k++)
+    if (c[k].kind == RC_SET) remote_apply_set(c[k], k);
 }
 
 /* tune on the screen in the globals (a remote press) */
@@ -1545,15 +1604,23 @@ static void publish_state(void)
   remote_snap v = { 0 };
   v.sleep_min = sleep_min;
   v.sleep_left = sleep_at ? (int)ceil((sleep_at - t_now()) / SLEEP_UNIT) : 0;
-  v.leveller = opts.leveller;
-  v.zoom = zoom;
   v.res240 = res240;
-  if (pl && chans.count && !asleep && !testcard_on) {
+  v.focus = focus_side;
+  picture_snap *here = &v.pic[focus_side], *away = &v.pic[!focus_side];
+  here->leveller = opts.leveller;
+  here->zoom = zoom;
+  away->leveller = other.leveller;
+  away->zoom = other.zoom;
+  int live = chans.count && !asleep && !testcard_on;
+  for (int k = 0; k < 2; k++) {
+    player *p = k ? (dual && screen2_on ? other.pl : NULL) : pl;
+    picture_snap *ps = k ? away : here;
+    if (!p || !live) continue;
     player_info in;
-    player_get_info(pl, &in);
-    v.audio_cur = in.audio_cur;
-    v.naudio = in.naudio;
-    memcpy(v.audio_lang, in.audio_lang, sizeof(v.audio_lang));
+    player_get_info(p, &in);
+    ps->audio_cur = in.audio_cur;
+    ps->naudio = in.naudio;
+    memcpy(ps->audio_lang, in.audio_lang, sizeof(ps->audio_lang));
   }
   pthread_mutex_lock(&remote_mu);
   pubset = v;
@@ -1780,6 +1847,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
       other.cur = other.prev = i2 >= 0 ? (size_t)i2 : (cur + 1) % chans.count;
       other.saved_idx = i2;
       other.zoom = opts.zoom_default;
+      other.leveller = opts.leveller;
       other.pl = player_create();
       if (other.pl) player_set_margin(other.pl, opts.overscan);
       char *d = slurp(dual_path, 64);
@@ -1812,7 +1880,7 @@ RETRO_API void retro_unload_game(void)
   remote_mode = 0;
   atomic_store(&remote_req, 0);
   atomic_store(&pub_cur, -1);
-  rset.kind = RC_NONE;                               /* the server is stopped: no lock needed */
+  for (int k = 0; k < 3; k++) rset[k].kind = RC_NONE;   /* the server is stopped: no lock needed */
   guide_shutdown();
   if (pl) { player_destroy(pl); pl = NULL; }
   if (other.pl) { player_destroy(other.pl); other.pl = NULL; }

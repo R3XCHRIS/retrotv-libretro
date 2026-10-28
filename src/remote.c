@@ -134,7 +134,8 @@ void remote_parse(const char *req, remote_cmd *c)
     c->kind = (a && *c->ch) || (b && *c->name) ? RC_TUNE : RC_BAD;
   } else c->kind = RC_NONE;
 #undef IS
-  if (c->kind == RC_TUNE || c->kind == RC_UP || c->kind == RC_DOWN || c->kind == RC_LAST || c->kind == RC_FOCUS) {
+  if (c->kind == RC_TUNE || c->kind == RC_UP || c->kind == RC_DOWN || c->kind == RC_LAST || c->kind == RC_FOCUS
+      || c->kind == RC_SETTINGS || c->kind == RC_SET) {
     char v[8];
     if (query_get(q, qlen, "screen", v, sizeof(v))) {
       if (!strcmp(v, "1")) c->screen = 1;
