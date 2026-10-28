@@ -23,7 +23,7 @@ typedef struct {
   int picture;         /* 0 fit, 1 zoom */
   int output;          /* 0 = 640x480, 1 = 240p */
   int screen2;         /* /set?screen2=on|off (dual mode): 1 on, 0 off */
-  int screen;          /* screen=1|2 on /tune /up /down /last /focus; 0 = the focused one */
+  int screen;          /* screen=1|2 on /tune /up /down /last /focus /settings /set; 0 = the focused one */
 } remote_cmd;
 
 /* Parse an HTTP request's first line ("GET /tune?ch=36 HTTP/1.1").
