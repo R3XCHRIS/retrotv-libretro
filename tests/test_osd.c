@@ -101,7 +101,7 @@ int main(void)
         int red = (int)((v >> 16) & 0xff);           /* was 320 & 0xff = 64 before any shift */
         same += (v & 0xff) == 128 && red >= 64 - 60 && red <= 64 + 60;
       }
-      CHECK(same > PH * 3 / 4);
+      CHECK(same > PH * 2 / 3);                     /* the two bars cover about 28% */
     }
     osd_surface s240 = { a, PW, PH, PW, 1 };          /* 240p: half the rows, no overrun (ASan) */
     uint32_t s3 = 5;

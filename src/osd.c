@@ -148,8 +148,8 @@ void osd_vhs_pause(osd_surface *s, uint32_t *seed, unsigned frame)
 
   /* the noise bar sits in the lower third and drifts; a faint one flickers higher up */
   double t = frame * 0.013;
-  int c1 = (int)(rows * (0.74 + 0.05 * sin(t))), h1 = 26 / k;
-  int c2 = (int)(rows * (0.22 - 0.04 * sin(t * 1.7))), h2 = 8 / k;
+  int c1 = (int)(rows * (0.74 + 0.05 * sin(t))), h1 = 52 / k;
+  int c2 = (int)(rows * (0.30 - 0.04 * sin(t * 1.7))), h2 = 16 / k;   /* below the PAUSED overlay */
   int band2 = (frame / 5) % 4 != 0;
   int foot = 7 / k;                                  /* head-switching lines at the bottom */
 
