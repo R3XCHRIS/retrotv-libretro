@@ -12,7 +12,7 @@ tests in CI. The core doesn't modify ReplayOS. Installing it there is a separate
 manual step that's documented with backups.
 
 If something doesn't behave as described, please
-[open an issue](https://github.com/R3XCHRIS/retrotv-libretro/issues).
+[open an issue](https://github.com/chris-skitch/retrotv-libretro/issues).
 
 ## For contributors
 

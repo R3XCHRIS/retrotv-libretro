@@ -39,7 +39,7 @@ You need **ReplayOS on a Raspberry Pi 5** with internet access.
 ssh root@replay.local
 ```
 ```bash
-curl -fsSL https://raw.githubusercontent.com/R3XCHRIS/retrotv-libretro/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/install.sh | bash
 ```
 
 **Option 2: from the TV, no SSH.** Copy
@@ -49,7 +49,7 @@ ReplayOS storage (the SD card, USB drive or network share), then run
 
 **Where RetroTV goes** (see [Which slot](#which-slot-av-test-or-virtual-boy)): add
 `-s -- --slot vb` or `--slot both` to the one-liner, e.g.
-`curl -fsSL https://raw.githubusercontent.com/R3XCHRIS/retrotv-libretro/main/install.sh | bash -s -- --slot both`.
+`curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/install.sh | bash -s -- --slot both`.
 Without it you get the A/V test slot; updates keep your choice.
 
 Either way, the installer:
