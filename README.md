@@ -1,10 +1,24 @@
 # RetroTV
 
+[![Latest release](https://img.shields.io/github/v/release/chris-skitch/retrotv-libretro)](https://github.com/chris-skitch/retrotv-libretro/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/chris-skitch/retrotv-libretro/ci.yml?branch=main&label=build)](https://github.com/chris-skitch/retrotv-libretro/actions/workflows/ci.yml)
+[![Downloads](https://img.shields.io/github/downloads/chris-skitch/retrotv-libretro/total)](https://github.com/chris-skitch/retrotv-libretro/releases)
+[![License: MIT](https://img.shields.io/github/license/chris-skitch/retrotv-libretro)](LICENSE)
+[![Raspberry Pi 5 · ReplayOS](https://img.shields.io/badge/Raspberry%20Pi%205-ReplayOS-c51a4a?logo=raspberrypi&logoColor=white)](https://www.replayos.com)
+
 **Flip through live TV like it's 1993.** RetroTV is a libretro core that turns an
 IPTV playlist into a 90s cable box for **ReplayOS on the Raspberry Pi 5**: channel
 up and down, a channel banner with what's on now and next, a scrolling TV guide,
 static between channels and a blue NO SIGNAL screen. It's made for CRTs, with a
 real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to install.
+
+<p align="center">
+  <a href="https://youtu.be/OCvExU21ayg">
+    <img src="https://img.youtube.com/vi/OCvExU21ayg/maxresdefault.jpg" width="640" alt="Watch the demo: Dual-CRT 90s cable TV on Raspberry Pi 5 (YouTube)">
+  </a>
+  <br>
+  <a href="https://youtu.be/OCvExU21ayg"><b>▶ Watch the demo:</b> two CRTs, one Raspberry Pi 5, 90s cable TV</a>
+</p>
 
 <p align="center">
   <img src="docs/screenshots/banner.png" width="400" alt="Channel banner with now and next">
