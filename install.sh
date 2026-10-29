@@ -7,15 +7,16 @@
 #   --uninstall          give the borrowed slot back and remove the core
 #   --version vX.Y.Z     install a specific release instead of the latest
 #   --storage DIR        ReplayOS storage root (default: the one ReplayOS uses)
-#   --slot SLOT          where RetroTV goes: avtest (Extra > audio_video_test, the default),
-#                        vb (Nintendo Virtual Boy: remote start, Zaparoo) or both.
-#                        Without it, an update keeps the last choice.
+#   --slot SLOT          where RetroTV goes: system (its own system, ReplayOS 2.1.0+; the
+#                        default there), avtest (Extra > audio_video_test, the default
+#                        before 2.1.0), vb (Nintendo Virtual Boy: remote start, Zaparoo)
+#                        or both (avtest and vb). Without it, an update keeps the last choice.
 #
 # What it does: downloads the release (core + scripts), checks the SHA-256
 # sums, copies the core to <storage>/retrotv/ and the scripts to
 # <storage>/roms/_extra/, keeps an existing playlist.txt, then runs
-# retrotv_install.sh, which points Extra > audio_video_test at RetroTV
-# (with backups) and restarts ReplayOS.
+# retrotv_install.sh, which registers RetroTV as a system (ReplayOS 2.1.0+) or
+# points a borrowed slot at it (with backups), and restarts ReplayOS.
 set -euo pipefail
 
 REPO="chris-skitch/retrotv-libretro"
@@ -32,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     --uninstall) UNINSTALL=1 ;;
     --version) [[ $# -ge 2 ]] || die "--version needs a tag, e.g. v0.2.0"; BASE="https://github.com/$REPO/releases/download/$2"; shift ;;
     --storage) [[ $# -ge 2 ]] || die "--storage needs a directory"; STORAGE="$2"; shift ;;
-    --slot) [[ $# -ge 2 ]] || die "--slot needs avtest, vb or both"; SLOTARG=(--slot "$2"); shift ;;
+    --slot) [[ $# -ge 2 ]] || die "--slot needs system, avtest, vb or both"; SLOTARG=(--slot "$2"); shift ;;
     NULL) ;;                                           # ReplayOS passes NULL from the Extras menu
     *) die "unknown option: $1" ;;
   esac
