@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # RetroTV one-line installer for ReplayOS (Raspberry Pi 5). Run on the Pi as root:
 #
-#   curl -fsSL https://raw.githubusercontent.com/R3XCHRIS/retrotv-libretro/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/install.sh | bash
 #
 # Options (after "bash -s --"):
 #   --uninstall          give the borrowed slot back and remove the core
@@ -18,7 +18,7 @@
 # (with backups) and restarts ReplayOS.
 set -euo pipefail
 
-REPO="R3XCHRIS/retrotv-libretro"
+REPO="chris-skitch/retrotv-libretro"
 BASE="${RETROTV_BASE:-https://github.com/$REPO/releases/latest/download}"
 STORAGE=""
 UNINSTALL=0
