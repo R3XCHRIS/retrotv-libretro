@@ -30,7 +30,7 @@
 #include "remote.h"
 #include "webui.h"
 
-#define RETROTV_VERSION "0.2.9"
+#define RETROTV_VERSION "0.2.10"
 /* Output refresh: 60 Hz, or 50 Hz while a 25/50 fps (PAL) channel plays so
  * every frame is held equally long. Audio frames per run follow the rate. */
 #define AFRAMES_MAX ((size_t)(PLAYER_RATE / 50))   /* 960 stereo frames per run at 50 Hz */
