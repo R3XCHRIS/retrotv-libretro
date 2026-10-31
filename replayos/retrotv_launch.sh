@@ -5,11 +5,9 @@
 #   retrotv_launch.sh 36     ... and tune channel 36 (instant when it's already on)
 #   retrotv_launch.sh retrotv://36   the same: the form Zaparoo's history passes
 #
-# Needs RetroTV as its own system (ReplayOS 2.1.0+, retrotv_install.sh --slot system)
-# or in the Virtual Boy slot (--slot vb or both): ReplayOS starts it through its own
-# API (load_game), without autostart or a restart. The A/V test slot can't be started
-# this way (ReplayOS refuses it). As a system it opens roms/retrotv/RetroTV.txt, else
-# the first line-up there (RETROTV_GAME=<file in roms/retrotv> picks another).
+# ReplayOS starts RetroTV (its own system, "retrotv") through its own API (load_game),
+# without autostart or a restart. It opens roms/retrotv/RetroTV.txt, else the first
+# line-up there (RETROTV_GAME=<file in roms/retrotv> picks another).
 #
 # Installed to /media/sd/retrotv/ (the SD card), not the ReplayOS storage:
 # when ReplayOS restarts it remounts NFS storage, and a script running from
@@ -43,10 +41,8 @@ if ! status | grep -q '"core_info":"RetroTV'; then
       [[ -f $dir/$GAME ]] || GAME=$(find "$dir" -maxdepth 1 -type f \( -iname '*.txt' -o -iname '*.m3u' -o -iname '*.m3u8' \) ! -name '.*' -printf '%f\n' 2>/dev/null | sort | head -1)
       [[ -n $GAME ]] || { log "no line-up in $dir - re-run retrotv_install.sh"; exit 1; }
     fi
-  elif awk '/^\[/{s=($0=="[nintendo_vb]")} s && /retrotv_libretro\.so/' /opt/replay/cores/cores.cfg | grep -q .; then
-    SYSTEM=nintendo_vb GAME=RetroTV.vb
   else
-    log "RetroTV isn't installed as a system or in the Virtual Boy slot - run retrotv_install.sh (--slot system on ReplayOS 2.1.0+, else --slot vb)"
+    log "RetroTV isn't installed (no /opt/replay/cores/retrotv_libretro.cfg) - run retrotv_install.sh"
     exit 1
   fi
   [[ $GAME =~ ^[A-Za-z0-9._\ -]+$ ]] || { log "not a line-up file name: $GAME"; exit 1; }

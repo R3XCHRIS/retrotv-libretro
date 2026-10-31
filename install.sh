@@ -1,31 +1,26 @@
 #!/usr/bin/env bash
-# RetroTV one-line installer for ReplayOS (Raspberry Pi 5). Run on the Pi as root:
+# RetroTV one-line installer for ReplayOS 2.1.0 or newer (Raspberry Pi 5). Run on the Pi as root:
 #
 #   curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/install.sh | bash
 #
 # Options (after "bash -s --"):
-#   --uninstall          give the borrowed slot back and remove the core
+#   --uninstall          remove RetroTV (the core and its system)
 #   --version vX.Y.Z     install a specific release instead of the latest
 #   --storage DIR        ReplayOS storage root (default: the one ReplayOS uses)
 #   --no-restart         don't restart ReplayOS (RetroTV's own updater uses this; exit 3 =
 #                        a restart is still needed)
-#   --slot SLOT          where RetroTV goes: system (its own system, ReplayOS 2.1.0+; the
-#                        default there), avtest (Extra > audio_video_test, the default
-#                        before 2.1.0), vb (Nintendo Virtual Boy: remote start, Zaparoo)
-#                        or both (avtest and vb). Without it, an update keeps the last choice.
 #
 # What it does: downloads the release (core + scripts), checks the SHA-256
 # sums, copies the core to <storage>/retrotv/ and the scripts to
 # <storage>/roms/_extra/, keeps an existing playlist.txt, then runs
-# retrotv_install.sh, which registers RetroTV as a system (ReplayOS 2.1.0+) or
-# points a borrowed slot at it (with backups), and restarts ReplayOS.
+# retrotv_install.sh, which registers RetroTV as a system ("RetroTV" in the system
+# list) and restarts ReplayOS.
 set -euo pipefail
 
 REPO="chris-skitch/retrotv-libretro"
 BASE="${RETROTV_BASE:-https://github.com/$REPO/releases/latest/download}"
 STORAGE=""
 UNINSTALL=0
-SLOTARG=()
 RESTARTARG=()
 
 say() { echo "[retrotv] $*"; }
@@ -36,7 +31,7 @@ while [[ $# -gt 0 ]]; do
     --uninstall) UNINSTALL=1 ;;
     --version) [[ $# -ge 2 ]] || die "--version needs a tag, e.g. v0.2.0"; BASE="https://github.com/$REPO/releases/download/$2"; shift ;;
     --storage) [[ $# -ge 2 ]] || die "--storage needs a directory"; STORAGE="$2"; shift ;;
-    --slot) [[ $# -ge 2 ]] || die "--slot needs system, avtest, vb or both"; SLOTARG=(--slot "$2"); shift ;;
+    --slot) [[ $# -ge 2 ]] && shift; say "--slot is no longer needed: RetroTV is always its own system" ;;
     --no-restart) RESTARTARG=(--no-restart) ;;
     NULL) ;;                                           # ReplayOS passes NULL from the Extras menu
     *) die "unknown option: $1" ;;
@@ -65,6 +60,9 @@ if [[ $UNINSTALL -eq 1 ]]; then
   exec bash "$EXTRA/retrotv_uninstall.sh"
 fi
 
+v=$(dpkg-query -W -f='${Version}' replay-frontend 2>/dev/null || true)   # external systems arrived in 2.1.0
+[[ -n $v && $(printf '%s\n' 2.1.0 "$v" | sort -V | head -1) == 2.1.0 ]] ||
+  die "RetroTV needs ReplayOS 2.1.0 or newer (this is ${v:-unknown}): update ReplayOS first"
 command -v curl >/dev/null || die "curl is needed"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -91,7 +89,7 @@ chmod 755 "$EXTRA/retrotv_install.sh" "$EXTRA/retrotv_uninstall.sh" "$EXTRA/retr
 say "core and scripts copied"
 
 rc=0
-bash "$EXTRA/retrotv_install.sh" "${SLOTARG[@]}" "${RESTARTARG[@]}" || rc=$?
+bash "$EXTRA/retrotv_install.sh" "${RESTARTARG[@]}" || rc=$?
 if grep -qvE '^[[:space:]]*(#|$)' "$STORAGE/retrotv/playlist.txt" 2>/dev/null; then
   say "your playlist.txt is kept"
 else

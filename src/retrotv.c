@@ -965,7 +965,7 @@ static void last_init(const char *src)
 }
 
 /* mkdir -p for the directory part of path (frontends may hand us a save
- * directory that doesn't exist yet: ReplayOS does for the avtest slot) */
+ * directory that doesn't exist yet: ReplayOS 2.0 did for its Extras systems) */
 static void make_parent_dirs(const char *path)
 {
   char d[1100];

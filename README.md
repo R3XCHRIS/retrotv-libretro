@@ -45,7 +45,8 @@ real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to in
 
 ## Install
 
-You need **ReplayOS on a Raspberry Pi 5** with internet access.
+You need **ReplayOS 2.1.0 or newer on a Raspberry Pi 5**, with internet access. RetroTV
+installs as its own system: **RetroTV** in ReplayOS's system list.
 
 **Option 1: one line over SSH** (ReplayOS's root password is `replayos` unless you changed it):
 
@@ -61,26 +62,23 @@ curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/
 ReplayOS storage (the SD card, USB drive or network share), then run
 **Extra → retrotv_update.sh**.
 
-**Where RetroTV goes** (see [Where RetroTV goes](#where-retrotv-goes-its-own-system-or-a-borrowed-slot)):
-on **ReplayOS 2.1.0 or newer**, RetroTV becomes **its own system**, "RetroTV" in the
-system list. On older ReplayOS it borrows a slot: add `-s -- --slot vb` or `--slot both`
-to the one-liner, e.g.
-`curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/install.sh | bash -s -- --slot both`.
-Without it you get the A/V test slot. Updates keep your choice: after upgrading to
-ReplayOS 2.1.0, move a slot install over with `--slot system`.
-
 Either way, the installer:
 - downloads the latest release and checks its SHA-256 sums;
-- copies the core to `<storage>/retrotv/`;
-- creates a commented `playlist.txt` there if you don't have one;
+- installs the core and registers it as a ReplayOS system
+  (`/opt/replay/cores/retrotv_libretro.cfg`), with `roms/retrotv/RetroTV.txt` as its first line-up;
+- copies the core to `<storage>/retrotv/` and creates a commented `playlist.txt` there if you don't have one;
 - adds **retrotv_update.sh** and **retrotv_uninstall.sh** to Extras;
 - restarts ReplayOS.
+
+Older RetroTV versions borrowed ReplayOS's A/V test or Virtual Boy slot. The installer moves
+such an install over: the slots get their own cores back, and your settings (two screens
+too) and last channel come along.
 
 Then:
 
 1. Open `retrotv/playlist.txt` on your storage and put your playlist link on its own line (see below).
-2. On the TV, open **RetroTV** in the system list (ReplayOS 2.1.0+). On older ReplayOS, open
-   **Extra → audio_video_test** (or **Nintendo Virtual Boy → RetroTV** with `--slot vb`).
+2. On the TV, open **RetroTV** in the system list (an orange folder, like every external
+   system), then **RetroTV** inside it.
 
 **Updates from the TV.** RetroTV checks GitHub once a day for a newer version (turn it off
 with **System Settings → Updates → Check for updates**). When there is one, the channel banner
@@ -89,11 +87,8 @@ the new version starts the next time you open RetroTV. The phone remote shows an
 button too, and `/update` reports it (`?check=1` checks now, `?install=1` installs). Installing is
 always your choice. It runs the release's own installer, which checks the SHA-256 sums first.
 
-**Update** with **Extra → retrotv_update.sh**. **Uninstall** with
-**Extra → retrotv_uninstall.sh**, which removes the RetroTV system and gives borrowed
-slots back (A/V test pattern, Virtual Boy). The RetroTV system survives ReplayOS updates.
-With a borrowed slot, re-run the installer after a ReplayOS update, because updates
-restore the slots.
+You can also update with **Extra → retrotv_update.sh**. **Uninstall** with
+**Extra → retrotv_uninstall.sh**. ReplayOS updates keep RetroTV installed.
 
 ## Your channels: `playlist.txt`
 
@@ -108,7 +103,7 @@ http://<dispatcharr>:9191/output/m3u/<channel-profile>
 http://<tunarr>:8088/api/channels.m3u
 ```
 
-**More than one line-up (ReplayOS 2.1.0+).** The RetroTV system lists the files in
+**More than one line-up.** The RetroTV system lists the files in
 `roms/retrotv/` as its games. The installer adds `RetroTV.txt`, which uses
 `retrotv/playlist.txt`. Add more files for more line-ups, each with its own last channel:
 a `.txt` written like `playlist.txt` (a link, and optionally `epg=`), or an `.m3u` file.
@@ -143,7 +138,7 @@ Button names are the labels on an Xbox-style pad.
 | A | What's on (banner) |
 | B | Last channel |
 | Y | Zoom: letterboxed (Fit) or fill the screen (Zoom), remembered per channel |
-| X | Menu: sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, test card, controls (with two screens: Screen 2 on/off and Swap screens instead of 480/240p) |
+| X | Menu: pause / back to live, sleep timer, audio track, volume leveller, Fit/Zoom, 480/240p, update, test card, controls (with two screens: Screen 2 on/off and Swap screens instead of 480/240p) |
 | Start | TV guide: Up/Down channel, Left/Right 30 minutes, A to watch, B to close |
 | Select | Channel list: Up/Down one channel, Left/Right a page, A to watch, B to close |
 | R2 / L2 | Pause (a VCR-style still frame, or a clean still: *Paused picture* option) and play on (the channel keeps arriving in memory: up to about 15 minutes at 8–10 Mbit/s, less with both screens paused; it plays on by itself when full) / back to live. Also in the X menu |
@@ -221,12 +216,10 @@ With two CRTs on the Pi 5's two HDMI ports, RetroTV can play a channel on each.
 2. Open RetroTV, go to **System Settings → Picture → Two screens (dual mode) → On**, save, and quit RetroTV.
 3. Open RetroTV again. In the ReplayOS in-game menu, **Replay Options → Multi screen → Dual horizontal**,
    then **Save system settings**, so only RetroTV uses it (your games keep their own setting). Quit
-   and open RetroTV once more. Settings are per system: with both slots, do this in each.
-   Moving to the RetroTV system (ReplayOS 2.1.0+) copies them over.
-   Keep the global Multi screen on **Dual smart** or off: as the global setting, Dual horizontal
-   makes the main CRT flicker in everything.
-4. Don't use an `_autostart` file with this: ReplayOS 2.0.60 crashes at start-up when the autostarted
-   game has its own Dual horizontal setting.
+   and open RetroTV once more. Keep the global Multi screen on **Dual smart** or off: as the global
+   setting, Dual horizontal makes the main CRT flicker in everything.
+4. Be careful with ReplayOS's autostart here: on ReplayOS 2.0.60, autostarting a game with its own
+   Dual horizontal setting crashed ReplayOS at start-up. It hasn't been retried on 2.1.
 
 **Using it:**
 - **X → Screen 2: On** turns screen 2 on (on its last channel) and gives it the focus. **Off** shows a
@@ -256,11 +249,13 @@ While RetroTV is playing, it answers simple web requests on port **7474**.
 
 **On your phone:** set **System Settings → Remote control → Home network**, then
 open `http://<your-pi>:7474/` in the browser (add it to your home screen for one
-tap). You get the channel on now, CH up/down and LAST buttons, and every channel
-with what's on now and next, with the programme's picture from the guide (or the
-channel logo). Tap a channel to watch it, or search by channel or programme. The
-⚙ button opens the quick settings: sleep timer, audio track, volume leveller,
-Fit/Zoom and 480/240p, the same as the X menu on the TV.
+tap). You get the channel on now; CH up/down, LAST, PAUSE/PLAY and LIVE buttons; with
+two screens, SCREEN 1 / SCREEN 2 and SWAP; and every channel with what's on now and
+next, with the programme's picture from the guide (or the channel logo). Tap a channel
+to watch it, or search by channel or programme. The ⚙ button opens the quick settings:
+sleep timer, audio track, volume leveller, Fit/Zoom and 480/240p, the same as the X menu
+on the TV (with two screens, for either screen). When a newer RetroTV is out, an INSTALL
+button appears.
 
 <p align="center">
   <img src="docs/screenshots/web-remote.png" width="300" alt="Remote control page on a phone">
@@ -283,6 +278,7 @@ Fit/Zoom and 480/240p, the same as the X menu on the TV.
 | `/focus?screen=2` | move the focus (and the sound) to screen 2 |
 | `/set?screen2=on` | turn screen 2 on or off |
 | `/swap` | swap the two screens' channels; you keep hearing the screen you were on (X → Swap screens) |
+| `/update` | is a newer RetroTV out? `?check=1` checks now, `?install=1` installs it (see [Install](#install)) |
 
 ```bash
 curl http://127.0.0.1:7474/tune?ch=36
@@ -301,8 +297,7 @@ from the sleep timer, and on the channel already playing just shows the banner.
 
 ## Remote start and Zaparoo
 
-As **its own system** (ReplayOS 2.1.0+) or in the **Virtual Boy slot**, RetroTV can be
-started from anywhere on the Pi, without autostart or restarting ReplayOS:
+RetroTV can be started from anywhere on the Pi, without autostart or restarting ReplayOS:
 
 ```bash
 bash /media/sd/retrotv/retrotv_launch.sh 36
@@ -323,24 +318,14 @@ restarts it remounts network storage, and a script running from there would bloc
   `config.toml.before-retrotv`).
 
 Zaparoo doesn't recognise RetroTV's core, so RetroTV tells it what's on itself: the
-Zaparoo app shows the channel you're watching (e.g. *Video · RetroTV: 36 Star Trek*).
-Turn it off with **System Settings → Tell Zaparoo what's on**. Write channel cards with
-the ZapScript above, not the app's "write what's playing" (that card wouldn't tune).
+Zaparoo app shows the channel you're watching (e.g. *Video · RetroTV: 36 Star Trek*), and
+those channels in its history and recents launch again. Turn it off with **System
+Settings → Tell Zaparoo what's on**. Write channel cards with the ZapScript above, not the
+app's "write what's playing" (that card wouldn't tune).
 
-**Start RetroTV with ReplayOS** (a cable box that comes on with the TV): ReplayOS
-launches whatever an autostart file names. On the Pi, as root (replace `nfs` with
-your storage: `usb`, `nvme` or `sd`):
-
-```bash
-mkdir -p /media/nfs/roms/avtest && : > /media/nfs/roms/avtest/retrotv.lr
-echo /roms/avtest/retrotv.lr > /media/nfs/roms/_autostart/audio_video_test.lr
-```
-
-Delete `roms/_autostart/audio_video_test.lr` to stop it. The path in the file is relative
-to your storage and starts with `/`. The `avtest` folder name is what tells
-ReplayOS to use RetroTV. As its own system (ReplayOS 2.1.0+), name a line-up instead:
-`echo /roms/retrotv/RetroTV.txt > /media/nfs/roms/_autostart/audio_video_test.lr`. Don't combine autostart with RetroTV's own Multi screen
-setting for two screens: ReplayOS 2.0.60 crashes at start-up (see [Two screens](#two-screens)).
+**Start RetroTV with ReplayOS** (a cable box that comes on with the TV): use ReplayOS's
+autostart with the line-up's path, `/roms/retrotv/RetroTV.txt` (relative to your storage,
+starting with `/`). See the caution under [Two screens](#two-screens) first.
 
 ## Servers
 
@@ -352,26 +337,11 @@ setting for two screens: ReplayOS 2.0.60 crashes at start-up (see [Two screens](
   single channel's video). The guide comes along.
 - **Anything else:** an M3U with HTTP(S) MPEG-TS or HLS streams. Add `epg=` for a guide.
 
-## Where RetroTV goes: its own system or a borrowed slot
-
-ReplayOS 2.1.0 added external systems, so RetroTV gets its own entry there. Older
-ReplayOS can't add systems, so RetroTV borrows one (or both) of its slots:
-
-| Slot | Opens from | You lose | Remote start |
-|---|---|---|---|
-| `--slot system` (default on 2.1.0+) | **RetroTV** in the system list | nothing | yes: launcher and Zaparoo |
-| `--slot avtest` (default before 2.1.0) | **Extra → audio_video_test** | the A/V test pattern | no: ReplayOS's API refuses Extras |
-| `--slot vb` | **Nintendo Virtual Boy → RetroTV** | Virtual Boy emulation (refused if you have Virtual Boy games) | yes: launcher and Zaparoo |
-| `--slot both` | both | both | yes |
-
-As a system, RetroTV is registered by `/opt/replay/cores/retrotv_libretro.cfg` next to
-the core, and the installer gives any borrowed slot back (an external system can't
-share its core with a slot). RetroTV's System Settings and saves are kept per system;
-a new one starts with a copy of the previous one's, so your two-screen setup and last
-channel come along. The PiBench slot was tried first, but ReplayOS mutes its sound.
-The uninstaller removes the system and gives the slots back.
-
 ## Troubleshooting
+
+- **RetroTV isn't in the system list:** it needs ReplayOS 2.1.0 or newer, and
+  **Visibility → Show external systems** on. ReplayOS logs why a registration was
+  rejected in `/var/log/replay.log` (set **System → Log level → Warn** first).
 
 - **Setup screen instead of channels:** it says what's wrong. Check the link in
   `playlist.txt` from another computer.

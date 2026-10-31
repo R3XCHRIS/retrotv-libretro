@@ -1,6 +1,6 @@
 # Roadmap
 
-## M0 — Prototype (this commit)
+## M0 — Prototype
 - [x] Cross-build for the Pi 5 against ReplayOS's own FFmpeg 7.1 (loaded at runtime with dlopen)
 - [x] M3U parser: `#EXTINF` tvg-id/name/logo/chno, group-title, `x-tvg-url`
 - [x] Live playback: H.264/AAC MPEG-TS over HTTP, with audio as the master clock
@@ -8,7 +8,7 @@
 - [x] Static and hiss while tuning, blue "NO SIGNAL" screen on errors
 - [x] Headless harness and Pi test with screenshots
 
-## M1a — Let Dispatcharr do the heavy lifting (next)
+## M1a — Let Dispatcharr do the heavy lifting
 Dispatcharr (v0.32.0 here) can already serve a channel subset and pre-transcoded
 streams through its normal M3U link. RetroTV keeps reading plain M3U + XMLTV;
 no Dispatcharr API client is needed for this.
@@ -137,16 +137,19 @@ banner, and automatically skipping channels that keep failing (the retry and NO 
 - [ ] Dispatcharr sometimes fails a cold tune with "Invalid data found when processing input"; retries cover it, but the root cause is unknown
 
 ## M3 — Into ReplayOS
-- [x] Interim path: borrow a slot. `pibench` turned out to be muted by ReplayOS; now `avtest`
-      (Extra → audio_video_test), with sound, verified on 2.0.60
-- [x] Installer and uninstaller with backups (`replayos/`)
-- [x] Start with ReplayOS: an `_autostart` file naming `/roms/avtest/retrotv.lr` (verified on 2.0.60)
+- [x] Its own system: ReplayOS 2.1.0 external systems (`retrotv_libretro.cfg`), line-ups in `roms/retrotv/`
+      (v0.3.0). Before 2.1.0 it borrowed a slot (A/V test, then Virtual Boy for remote start); the
+      installer moves such installs over, and slot support was dropped
+- [x] Installer and uninstaller (`replayos/`), surviving ReplayOS OTA updates
+- [x] Remote start via ReplayOS load_game: `retrotv_launch.sh`, Zaparoo system, channel cards and history
+- [x] Updates from the TV: daily check, X menu → Update installs the release without a restart (v0.3.2)
+- [x] Zaparoo "now playing": RetroTV reports its channel (v0.3.1)
 - [x] Remote control: HTTP on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/status`), local-only by default;
       Zaparoo tags via `**http.get:`; buttons from players 1-4 (Zaparoo's virtual pad is player 2)
 - [x] Phone remote page at `/` (served by the core, no install) and `/channels` with Now/Next
 - [x] Two screens: one channel per CRT via ReplayOS Dual horizontal (fixed 1280x480 @ 60 Hz), focus with Left/Right, X menu Screen 2 / Swap
 - [x] Two screens at 240p (1280x240, both outputs progressive), chosen in System Settings at start
-- [x] Virtual Boy slot: remote start via ReplayOS load_game, `retrotv_launch.sh`, Zaparoo system and channel cards
-- [ ] Ask the ReplayOS author for an official user-core hook
-- [ ] Check what a ReplayOS update does to the install (expect: re-run the installer)
+- [x] Pause (timeshift, about 15 minutes in RAM) with a VHS still frame; per-screen settings and swap from the phone
+- [ ] Ask the ReplayOS author for direct launch (no folder) and an icon for external systems
+- [ ] Autostart on ReplayOS 2.1 (`/roms/retrotv/RetroTV.txt`): try it, carefully, with two screens
 - [ ] Optional: hardware HEVC decode via V4L2 stateless (the Pi 5 only has HEVC hardware decode)

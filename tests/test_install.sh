@@ -36,51 +36,43 @@ run() {       # version script args...
 }
 slot_core() { awk -v s="[$1]" '/^\[/{in_s=($0==s)} in_s && /^low/{gsub(/.*= *"|".*/, ""); print}' "$CORES/cores.cfg"; }
 
-case="2.0.x keeps the old default"
+case="ReplayOS before 2.1.0 is refused"
 fresh
 run 2.0.60 retrotv_install.sh
-check '[[ $? -eq 0 ]]'
-check '[[ $(slot_core avtest) == retrotv_libretro.so && ! -f $CORES/retrotv_libretro.cfg ]]'
-check '[[ $(cat "$ST/retrotv/slot.txt") == avtest && -f $CORES/retrotv_libretro.so ]]'
-check 'grep -q "systemd-run.*restart replay.service" "$T/log"'
-
-case="2.0.x refuses --slot system"
-fresh
-run 2.0.60 retrotv_install.sh --slot system
-check '[[ $? -ne 0 ]] && grep -q "needs ReplayOS 2.1.0" "$T/out" && grep -q "this is 2.0.60" "$T/out"'
-check '[[ ! -f $CORES/retrotv_libretro.cfg && ! -f $T/log ]]'
-fresh
-run "" retrotv_install.sh --slot system
+check '[[ $? -ne 0 ]] && grep -q "needs ReplayOS 2.1.0 or newer (this is 2.0.60)" "$T/out"'
+check '[[ ! -f $CORES/retrotv_libretro.cfg && ! -f $CORES/retrotv_libretro.so && ! -f $T/log ]]'
+run "" retrotv_install.sh
 check '[[ $? -ne 0 ]] && grep -q "this is unknown" "$T/out"'
 
-case="2.1.0 fresh install: its own system"
+case="fresh install: its own system"
 fresh
 run 2.1.0 retrotv_install.sh
 check '[[ $? -eq 0 ]]'
 check '[[ $(grep -v "^#" "$CORES/retrotv_libretro.cfg") == $(printf "id = \"retrotv\"\nname = \"RetroTV\"\nextensions = \"m3u|m3u8|txt\"\ndevices = \"pi5\"") ]]'
 check '[[ $(stat -c %a "$CORES/retrotv_libretro.cfg") == 644 && ! -L $CORES/retrotv_libretro.cfg ]]'
-check '! grep -q retrotv_libretro "$CORES/cores.cfg"'
+check '! grep -q retrotv_libretro "$CORES/cores.cfg" && [[ $(slot_core avtest) == avtest_libretro.so ]]'
 check '[[ -f $ST/roms/retrotv/RetroTV.txt && $(grep -vc "^#" "$ST/roms/retrotv/RetroTV.txt") -eq 0 ]]'
-check '[[ $(cat "$ST/retrotv/slot.txt") == system && -x $SDC/retrotv/retrotv_launch.sh ]]'
-check 'grep -q "RetroTV in the system list" "$T/out"'
+check '[[ -x $SDC/retrotv/retrotv_launch.sh && ! -f $ST/retrotv/slot.txt ]]'
+check 'grep -q "RetroTV in the system list" "$T/out" && grep -q "systemd-run.*restart replay.service" "$T/log"'
 run 2.1.0 retrotv_install.sh
 check '[[ $? -eq 0 && $(ls "$ST/roms/retrotv" | wc -l) -eq 1 ]]'      # re-run: nothing doubled
 fresh
 run 2.1.3 retrotv_install.sh
 check '[[ -f $CORES/retrotv_libretro.cfg ]]'                              # later releases too
 
-case="2.1.0 update keeps the Virtual Boy slot, then moves to the system"
+case="an old slot install is moved over"
 fresh
-run 2.0.60 retrotv_install.sh --slot vb
-mkdir -p "$ST/config/settings/system/crt" "$ST/saves/nintendo_vb" "$SDC/zaparoo/launchers"
+sed -i '/^\[nintendo_vb\]/,/^$/s/mednafen_vb_libretro\.so/retrotv_libretro.so/; /^\[avtest\]/,/^$/s/avtest_libretro\.so/retrotv_libretro.so/' "$CORES/cores.cfg"
+mkdir -p "$ST/roms/nintendo_vb" "$ST/config/settings/system/crt" "$ST/saves/nintendo_vb" "$SDC/zaparoo/launchers"
+: >"$ST/roms/nintendo_vb/RetroTV.vb"
+echo both >"$ST/retrotv/slot.txt"
 echo 'replay_video_monitor_multi_mode = "2"' >"$ST/config/settings/system/crt/nintendo_vb.cfg"
 echo 5 >"$ST/saves/nintendo_vb/retrotv-last-1234abcd.txt"
-run 2.1.0 retrotv_install.sh
-check '[[ $(slot_core nintendo_vb) == retrotv_libretro.so && ! -f $CORES/retrotv_libretro.cfg ]]'
-run 2.1.0 retrotv_install.sh --slot system
-check '[[ $? -eq 0 && -f $CORES/retrotv_libretro.cfg ]]'
+run 2.1.0 retrotv_install.sh --slot both
+check '[[ $? -eq 0 && -f $CORES/retrotv_libretro.cfg ]] && grep -q "no longer needed" "$T/out"'
 check '[[ $(slot_core nintendo_vb) == mednafen_vb_libretro.so && $(slot_core avtest) == avtest_libretro.so ]]'
-check '[[ ! -f $ST/roms/nintendo_vb/RetroTV.vb ]]'
+check '! grep -q retrotv_libretro "$CORES/cores.cfg" && ls "$ST"/retrotv/backup/cores.cfg.* >/dev/null'
+check '[[ ! -f $ST/roms/nintendo_vb/RetroTV.vb && ! -f $ST/retrotv/slot.txt ]]'
 check 'grep -q multi_mode "$ST/config/settings/system/crt/retrotv.cfg"'
 check '[[ $(cat "$ST/saves/retrotv/retrotv-last-1234abcd.txt") == 5 ]]'
 check '[[ -x $SDC/retrotv/retrotv_launch.sh && -f $SDC/zaparoo/launchers/retrotv.toml ]]'
@@ -91,7 +83,7 @@ run 2.1.0 retrotv_install.sh --no-restart
 check '[[ $? -eq 3 && ! -f $T/log ]] && grep -q "restart ReplayOS to finish" "$T/out"'     # new system: restart needed
 run 2.1.0 retrotv_install.sh --no-restart
 check '[[ $? -eq 0 && ! -f $T/log ]] && grep -q "next time you open RetroTV" "$T/out"'     # an update: none
-check '[[ -f $CORES/retrotv_libretro.cfg && $(cat "$ST/retrotv/slot.txt") == system ]]'
+check '[[ -f $CORES/retrotv_libretro.cfg ]]'
 
 case="your own line-ups are left alone"
 fresh
@@ -99,15 +91,6 @@ mkdir -p "$ST/roms/retrotv"
 echo "http://tv.example/home.m3u" >"$ST/roms/retrotv/Home TV.txt"
 run 2.1.0 retrotv_install.sh
 check '[[ ! -f $ST/roms/retrotv/RetroTV.txt && -f "$ST/roms/retrotv/Home TV.txt" ]]'
-
-case="back to a slot removes the system"
-fresh
-run 2.1.0 retrotv_install.sh
-run 2.1.0 retrotv_install.sh --slot vb
-check '[[ $? -eq 0 && ! -f $CORES/retrotv_libretro.cfg && $(slot_core nintendo_vb) == retrotv_libretro.so ]]'
-check '[[ -f $ST/roms/nintendo_vb/RetroTV.vb && -x $SDC/retrotv/retrotv_launch.sh ]]'
-run 2.1.0 retrotv_install.sh --slot avtest
-check '[[ ! -f $CORES/retrotv_libretro.cfg && ! -f $SDC/retrotv/retrotv_launch.sh ]]'
 
 case="uninstall"
 fresh
