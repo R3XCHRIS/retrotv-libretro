@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # RetroTV for ReplayOS - install as its own system, or into a borrowed system slot.
 #
-#   retrotv_install.sh [--slot system|avtest|vb|both]
+#   retrotv_install.sh [--slot system|avtest|vb|both] [--no-restart]
+#
+#   --no-restart  don't restart ReplayOS (RetroTV's own updater): the new core is used
+#           when RetroTV is next opened. Exits 3 if a restart is still needed because
+#           the system list changes (cores.cfg or the manifest).
 #
 #   system  RetroTV as its own system (ReplayOS 2.1.0 or newer): "RetroTV" in the system
 #           list, with your line-ups as its games (roms/retrotv/*.txt, *.m3u). Remote
@@ -46,9 +50,11 @@ CFG=$CORES/cores.cfg
 MANIFEST=$CORES/retrotv_libretro.cfg
 NOW=$(date +%Y%m%d-%H%M%S)
 SLOT=""
+NORESTART=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --slot) [[ $# -ge 2 ]] || { echo "[retrotv] ERROR: --slot needs system, avtest, vb or both" >&2; exit 1; }; SLOT=$2; shift ;;
+    --no-restart) NORESTART=1 ;;
     NULL) ;;
     *) echo "[retrotv] ERROR: unknown option: $1" >&2; exit 1 ;;
   esac
@@ -111,6 +117,9 @@ fi
 say "slot: $SLOT"
 
 mkdir -p "$STORAGE/retrotv/backup"
+# what ReplayOS reads at start-up: if neither changes, no restart is needed
+startup_files() { { cat "$CFG"; cat "$MANIFEST" 2>/dev/null || true; } | md5sum; }
+before=$(startup_files)
 # plain cp: NFS shares usually squash root, so ownership can't be preserved there
 [[ -f "$STORAGE/retrotv/backup/cores.cfg.original" ]] || cp "$CFG" "$STORAGE/retrotv/backup/cores.cfg.original"
 cp "$CFG" "$STORAGE/retrotv/backup/cores.cfg.$NOW"
@@ -249,5 +258,13 @@ if [[ $WANT_SYS -eq 1 ]]; then where="RetroTV in the system list"
 elif [[ $WANT_AV -eq 1 ]]; then where="Extra > audio_video_test"
 else where="Nintendo Virtual Boy > RetroTV"; fi
 [[ $REMOTE -eq 1 ]] && say "remote start: bash $LAUNCH [channel]"
+if [[ $NORESTART -eq 1 ]]; then
+  if [[ $(startup_files) != "$before" ]]; then
+    say "done - restart ReplayOS to finish (the system list changed). Then open $where."
+    exit 3
+  fi
+  say "done - the new version starts the next time you open RetroTV"
+  exit 0
+fi
 say "done - restarting ReplayOS in 3 s. Then open $where."
 restart_replay

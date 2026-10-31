@@ -7,6 +7,8 @@
 #   --uninstall          give the borrowed slot back and remove the core
 #   --version vX.Y.Z     install a specific release instead of the latest
 #   --storage DIR        ReplayOS storage root (default: the one ReplayOS uses)
+#   --no-restart         don't restart ReplayOS (RetroTV's own updater uses this; exit 3 =
+#                        a restart is still needed)
 #   --slot SLOT          where RetroTV goes: system (its own system, ReplayOS 2.1.0+; the
 #                        default there), avtest (Extra > audio_video_test, the default
 #                        before 2.1.0), vb (Nintendo Virtual Boy: remote start, Zaparoo)
@@ -24,6 +26,7 @@ BASE="${RETROTV_BASE:-https://github.com/$REPO/releases/latest/download}"
 STORAGE=""
 UNINSTALL=0
 SLOTARG=()
+RESTARTARG=()
 
 say() { echo "[retrotv] $*"; }
 die() { echo "[retrotv] ERROR: $*" >&2; exit 1; }
@@ -34,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --version) [[ $# -ge 2 ]] || die "--version needs a tag, e.g. v0.2.0"; BASE="https://github.com/$REPO/releases/download/$2"; shift ;;
     --storage) [[ $# -ge 2 ]] || die "--storage needs a directory"; STORAGE="$2"; shift ;;
     --slot) [[ $# -ge 2 ]] || die "--slot needs system, avtest, vb or both"; SLOTARG=(--slot "$2"); shift ;;
+    --no-restart) RESTARTARG=(--no-restart) ;;
     NULL) ;;                                           # ReplayOS passes NULL from the Extras menu
     *) die "unknown option: $1" ;;
   esac
@@ -86,10 +90,12 @@ cp "$TMP/retrotv_install.sh" "$TMP/retrotv_uninstall.sh" "$TMP/retrotv_update.sh
 chmod 755 "$EXTRA/retrotv_install.sh" "$EXTRA/retrotv_uninstall.sh" "$EXTRA/retrotv_update.sh" || say "warning: could not mark the Extras scripts executable"
 say "core and scripts copied"
 
-bash "$EXTRA/retrotv_install.sh" "${SLOTARG[@]}"
+rc=0
+bash "$EXTRA/retrotv_install.sh" "${SLOTARG[@]}" "${RESTARTARG[@]}" || rc=$?
 if grep -qvE '^[[:space:]]*(#|$)' "$STORAGE/retrotv/playlist.txt" 2>/dev/null; then
   say "your playlist.txt is kept"
 else
   say "next: put your playlist link in $STORAGE/retrotv/playlist.txt"
 fi
 say "update later from Extra > retrotv_update.sh, remove with Extra > retrotv_uninstall.sh"
+exit $rc

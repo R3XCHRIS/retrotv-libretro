@@ -23,6 +23,7 @@ typedef struct {
   int res240;              /* output 640x240 (240p) instead of 640x480 */
   int remote;              /* remote control: 0 off, 1 this device only, 2 home network */
   int zaparoo;             /* tell Zaparoo Core on this device what's on */
+  int update_check;        /* look for a newer RetroTV once a day */
   int dual;                /* two screens: 1280x480 for ReplayOS "Dual horizontal" (applied at start) */
 } rtv_options;
 

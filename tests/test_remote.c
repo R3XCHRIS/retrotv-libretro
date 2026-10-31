@@ -92,6 +92,12 @@ int main(void)
   CHECK(c.kind == RC_BAD);
   remote_parse("GET /focus?screen=2 HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_FOCUS && c.screen == 2);
+  remote_parse("GET /update HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_UPDATE && c.update == 0);
+  remote_parse("GET /update?check=1 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_UPDATE && c.update == 1);
+  remote_parse("GET /update?install=1 HTTP/1.1\r\n", &c);
+  CHECK(c.kind == RC_UPDATE && c.update == 2);
   remote_parse("GET /swap HTTP/1.1\r\n", &c);
   CHECK(c.kind == RC_SWAP);
   remote_parse("GET /pause HTTP/1.1\r\n", &c);

@@ -18,6 +18,7 @@ static const struct { const char *key, *desc, *info; } CATS[] = {
   { "sound", "Sound", "Volume leveller and tuning sounds." },
   { "interface", "Interface", "Banner, clock and on-screen hints." },
   { "remote", "Remote control", "Change channel from Zaparoo, a script or a phone." },
+  { "updates", "Updates", "New versions of RetroTV." },
 };
 
 static const opt_def OPTS[] = {
@@ -72,6 +73,9 @@ static const opt_def OPTS[] = {
   { "retrotv_zaparoo", "Tell Zaparoo what's on",
     "Shows the channel you're watching in the Zaparoo app (as a Video item). Only talks to Zaparoo on this device; does nothing without it.",
     "remote", "on", { { "on", "On" }, { "off", "Off" } } },
+  { "retrotv_update_check", "Check for updates",
+    "Asks GitHub once a day whether a newer RetroTV is out, and says so on the banner and in the X menu. Installing is always your choice: X menu > Update.",
+    "updates", "on", { { "on", "On" }, { "off", "Off" } } },
 };
 #define NOPTS ((int)(sizeof(OPTS) / sizeof(OPTS[0])))
 #define NCATS ((int)(sizeof(CATS) / sizeof(CATS[0])))
@@ -122,6 +126,7 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   const char *rc = val("retrotv_remote", get, ctx);
   o->remote = !strcmp(rc, "off") ? 0 : !strcmp(rc, "lan") ? 2 : 1;
   o->zaparoo = !strcmp(val("retrotv_zaparoo", get, ctx), "on");
+  o->update_check = !strcmp(val("retrotv_update_check", get, ctx), "on");
 }
 
 void options_defaults(rtv_options *o) { options_parse(o, NULL, NULL); }

@@ -10,7 +10,10 @@
 #include <strings.h>
 #include <time.h>
 #include <errno.h>
+#include <spawn.h>
+#include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #include "libretro.h"
 #include "ffapi.h"
@@ -29,6 +32,7 @@
 #include "player.h"
 #include "remote.h"
 #include "zapnow.h"
+#include "update.h"
 #include "webui.h"
 
 #define RETROTV_VERSION "0.3.1"
@@ -97,7 +101,7 @@ static uint32_t noise_seed = 12345;
 static int list_open;
 static int guide_open;              /* TV guide screen (Start) */
 static int qm_open, qm_sel;          /* quick menu (X) */
-enum { QM_PAUSE, QM_LIVE, QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
+enum { QM_PAUSE, QM_LIVE, QM_SLEEP, QM_AUDIO, QM_LEVEL, QM_ZOOM, QM_OUTPUT, QM_SCREEN2, QM_SWAP, QM_UPDATE, QM_TESTCARD, QM_HELP, QM_CLOSE, QM_ROWS };
 static int qm_rows[QM_ROWS], qm_n;     /* the rows shown: Output in single mode, Screen 2 / Swap in dual mode */
 static int sleep_min;                /* sleep timer setting, minutes (0 = off) */
 static double sleep_at;              /* t_now() when the set switches off (0 = no timer) */
@@ -192,6 +196,21 @@ static pthread_mutex_t remote_mu = PTHREAD_MUTEX_INITIALIZER;
 static remote_snap pubset;             /* under remote_mu */
 static remote_cmd rset[3];             /* under remote_mu, by screen= (0 focused, 1, 2): kind RC_SET when something waits */
 static char remote_missing[32];        /* under remote_mu: a /tune for a channel the playlist doesn't have */
+/* RetroTV's own updates (the thread is under "updates" below) */
+enum { UP_IDLE, UP_CHECKING, UP_CURRENT, UP_AVAILABLE, UP_DOWNLOADING, UP_INSTALLING, UP_INSTALLED, UP_RESTART, UP_FAILED };
+static const char *const UP_NAMES[] = { "idle", "checking", "current", "available", "downloading",
+                                        "installing", "installed", "restart", "failed" };
+#define UPDATE_FIRST_CHECK 90
+#define UPDATE_EVERY (24 * 3600)
+#define UPDATE_INSTALL_WAIT 240                    /* seconds for install.sh */
+static pthread_mutex_t upd_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t upd_thread;
+static int upd_live;
+static atomic_int upd_stop, upd_auto, upd_req;     /* upd_req: 1 check now, 2 install */
+static int upd_state;                              /* under upd_mu, with: */
+static char upd_latest[32], upd_msg[160];
+static char upd_note[200];
+static atomic_int upd_note_ready;
 
 /* ---------- helpers ---------- */
 
@@ -357,6 +376,14 @@ static void draw_banner(osd_surface *s, player_state st)
     mmss(sh.behind, b, sizeof(b));
     snprintf(t, sizeof(t), "-%s BEHIND LIVE", b);
     osd_text(s, bx + bw - osd_text_width(t, 1) - 14, by + 42, t, 1, TH->accent);
+  } else {                                           /* a newer RetroTV: where to get it */
+    char t[48] = "";
+    pthread_mutex_lock(&upd_mu);
+    if (upd_state == UP_AVAILABLE) snprintf(t, sizeof(t), "%s AVAILABLE: X MENU", upd_latest);
+    else if (upd_state == UP_INSTALLED) snprintf(t, sizeof(t), "UPDATED: REOPEN RETROTV");
+    else if (upd_state == UP_RESTART) snprintf(t, sizeof(t), "UPDATED: RESTART REPLAYOS");
+    pthread_mutex_unlock(&upd_mu);
+    if (*t) osd_text(s, bx + bw - osd_text_width(t, 1) - 14, by + 42, t, 1, TH->accent);
   }
   if (dual && screen2_on && gside == focus_side) {   /* the screen you hear: a little speaker */
     int sx = bx + bw - osd_text_width(clk, 2) - 14 - 34, sy = by + 18;
@@ -727,6 +754,196 @@ static void guide_shutdown(void)
   epg_free(guide);
   guide = NULL;
   pthread_mutex_unlock(&guide_mu);
+}
+
+/* ---------- updates: is there a newer release, and install it on request ----------
+ * A thread asks GitHub for the latest release about 90 s after start, then once a
+ * day (System Settings > Updates), or when asked (X menu > Update, /update). To
+ * install, it downloads the release into /tmp/retrotv-update/<tag> and hands it to
+ * that release's install.sh (RETROTV_BASE=file://..., --no-restart), started with
+ * systemd-run so it isn't part of ReplayOS's process; install.sh checks SHA256SUMS.
+ * The new core is used the next time RetroTV opens. retro_run never waits on it. */
+extern char **environ;
+
+/* the running version (RETROTV_UPDATE_CURRENT pretends another, for tests) */
+static const char *upd_current(void)
+{
+  const char *e = getenv("RETROTV_UPDATE_CURRENT");
+  return e && *e ? e : RETROTV_VERSION;
+}
+
+static void upd_set(int st, const char *latest, const char *fmt, ...)
+{
+  pthread_mutex_lock(&upd_mu);
+  upd_state = st;
+  if (latest) snprintf(upd_latest, sizeof(upd_latest), "%s", latest);
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(upd_msg, sizeof(upd_msg), fmt, ap);
+  va_end(ap);
+  if (!atomic_load(&upd_note_ready)) {             /* for the log, from the main thread */
+    snprintf(upd_note, sizeof(upd_note), "update: %s%s%s", UP_NAMES[st], *upd_msg ? ": " : "", upd_msg);
+    atomic_store(&upd_note_ready, 1);
+  }
+  pthread_mutex_unlock(&upd_mu);
+}
+
+static int upd_interrupt(void *opaque) { (void)opaque; return atomic_load(&upd_stop); }
+
+static void upd_check(void)
+{
+  const AVIOInterruptCB icb = { upd_interrupt, NULL };
+  char err[128] = "", tag[32];
+  upd_set(UP_CHECKING, NULL, "");
+  char *json = fetch_url("https://api.github.com/repos/" UPDATE_REPO "/releases/latest", 1u << 20, &icb, NULL, err, sizeof(err));
+  int bad = !json || update_parse_tag(json, tag, sizeof(tag));
+  free(json);
+  if (atomic_load(&upd_stop)) return;
+  if (bad) upd_set(UP_IDLE, NULL, "couldn't check: %s", *err ? err : "no release found");
+  else if (update_cmp(tag, upd_current()) > 0) upd_set(UP_AVAILABLE, tag, "%s is available (this is %s)", tag, upd_current());
+  else upd_set(UP_CURRENT, tag, "up to date (%s)", upd_current());
+}
+
+static int upd_download(const char *tag, const char *file, const char *dir, char *err, size_t en)
+{
+  const AVIOInterruptCB icb = { upd_interrupt, NULL };
+  char url[256], path[200];
+  size_t len = 0;
+  snprintf(url, sizeof(url), "https://github.com/" UPDATE_REPO "/releases/download/%s/%s", tag, file);
+  snprintf(path, sizeof(path), "%s/%s", dir, file);
+  char *buf = fetch_url(url, 16u << 20, &icb, &len, err, en);
+  if (!buf) return -1;
+  FILE *f = fopen(path, "wb");
+  int ok = f && fwrite(buf, 1, len, f) == len;
+  if (f && fclose(f)) ok = 0;
+  free(buf);
+  if (!ok) snprintf(err, en, "can't write %s", path);
+  return ok ? 0 : -1;
+}
+
+static void upd_install(void)
+{
+  char tag[32], dir[96], err[128] = "", path[200];
+  pthread_mutex_lock(&upd_mu);
+  snprintf(tag, sizeof(tag), "%s", upd_latest);
+  pthread_mutex_unlock(&upd_mu);
+  if (!*tag) return;
+  upd_set(UP_DOWNLOADING, NULL, "downloading %s", tag);
+  snprintf(dir, sizeof(dir), "/tmp/retrotv-update/%s", tag);        /* tmpfs; tag is [A-Za-z0-9._-] */
+  mkdir("/tmp/retrotv-update", 0755);
+  mkdir(dir, 0755);
+  if (upd_download(tag, "SHA256SUMS", dir, err, sizeof(err))) { upd_set(UP_FAILED, NULL, "download failed: %s", err); return; }
+  snprintf(path, sizeof(path), "%s/SHA256SUMS", dir);
+  char *sums = slurp(path, 65536);
+  if (!sums || !update_sums_has(sums, "install.sh")) {             /* releases before the updater */
+    free(sums);
+    upd_set(UP_FAILED, NULL, "%s can't be installed from RetroTV: use Extra > retrotv_update.sh", tag);
+    return;
+  }
+  static const char *const files[] = { "install.sh", "retrotv_libretro.so", "retrotv_install.sh", "retrotv_uninstall.sh",
+                                       "retrotv_update.sh", "retrotv_launch.sh", "retrotv-zaparoo.toml" };
+  for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+    if (!update_sums_has(sums, files[i])) continue;
+    if (upd_download(tag, files[i], dir, err, sizeof(err))) {
+      free(sums);
+      if (!atomic_load(&upd_stop)) upd_set(UP_FAILED, NULL, "download failed (%s): %s", files[i], err);
+      return;
+    }
+  }
+  free(sums);
+  if (getenv("RETROTV_UPDATE_NOINSTALL")) { upd_set(UP_INSTALLED, NULL, "%s downloaded to %s (test: not installed)", tag, dir); return; }
+
+  upd_set(UP_INSTALLING, NULL, "installing %s", tag);
+  char rcf[200], cmd[900], unit[48];
+  snprintf(rcf, sizeof(rcf), "%s/rc", dir);
+  unlink(rcf);
+  snprintf(cmd, sizeof(cmd), "cd / && RETROTV_BASE=file://%s bash %s/install.sh --no-restart >%s/install.log 2>&1;"
+                             " echo $? >%s/rc.new && mv %s/rc.new %s/rc", dir, dir, dir, dir, dir, dir);
+  snprintf(unit, sizeof(unit), "--unit=retrotv-update-%ld", (long)time(NULL));
+  char *sd[] = { "systemd-run", "--quiet", "--collect", unit, "/bin/bash", "-c", cmd, NULL };
+  char *sh[] = { "/bin/bash", "-c", cmd, NULL };
+  pid_t pid;
+  int st = 0, started = !posix_spawnp(&pid, "systemd-run", NULL, NULL, sd, environ) && waitpid(pid, &st, 0) == pid
+                        && WIFEXITED(st) && !WEXITSTATUS(st);
+  pid_t child = -1;
+  if (!started) started = !posix_spawn(&child, "/bin/bash", NULL, NULL, sh, environ);   /* no systemd: run it here */
+  if (!started) { upd_set(UP_FAILED, NULL, "couldn't start the installer"); return; }
+  int rc = -1;
+  for (int i = 0; i < UPDATE_INSTALL_WAIT * 10 && !atomic_load(&upd_stop); i++) {
+    if (child > 0) waitpid(child, NULL, WNOHANG);
+    char *t = slurp(rcf, 32);
+    if (t) { rc = atoi(t); free(t); break; }
+    struct timespec ts = { 0, 100 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
+  if (atomic_load(&upd_stop)) return;              /* RetroTV closed: the installer carries on by itself */
+  if (rc == 0) upd_set(UP_INSTALLED, NULL, "%s installed: reopen RetroTV to use it", tag);
+  else if (rc == 3) upd_set(UP_RESTART, NULL, "%s installed: restart ReplayOS to finish", tag);
+  else {
+    char lp[200], last[120] = "";
+    snprintf(lp, sizeof(lp), "%s/install.log", dir);
+    char *log = slurp(lp, 1u << 16);
+    if (log) {                                     /* its last line says why */
+      char *e = log + strlen(log);
+      while (e > log && (e[-1] == '\n' || e[-1] == '\r')) *--e = 0;
+      char *l = strrchr(log, '\n');
+      snprintf(last, sizeof(last), "%s", l ? l + 1 : log);
+      free(log);
+    }
+    upd_set(UP_FAILED, NULL, rc < 0 ? "the installer didn't finish (%s/install.log)" : "install failed: %s",
+            rc < 0 ? dir : (*last ? last : "see /tmp/retrotv-update"));
+  }
+}
+
+static void *upd_main(void *arg)
+{
+  (void)arg;
+  time_t next = time(NULL) + UPDATE_FIRST_CHECK;
+  while (!atomic_load(&upd_stop)) {
+    int req = atomic_exchange(&upd_req, 0);
+    pthread_mutex_lock(&upd_mu);
+    int st = upd_state, newer = *upd_latest && update_cmp(upd_latest, upd_current()) > 0;
+    pthread_mutex_unlock(&upd_mu);
+    int done = st == UP_INSTALLED || st == UP_RESTART;   /* this RetroTV is still the old one: say so, not "available" */
+    if (req == 2 && newer && !done) upd_install();
+    else if (!done && (req == 1 || (atomic_load(&upd_auto) && time(NULL) >= next))) {
+      upd_check();
+      next = time(NULL) + UPDATE_EVERY;
+    }
+    struct timespec ts = { 0, 200 * 1000000L };
+    nanosleep(&ts, NULL);
+  }
+  return NULL;
+}
+
+static void update_start(void)
+{
+  if (upd_live) return;
+  atomic_store(&upd_stop, 0);
+  atomic_store(&upd_req, 0);
+  upd_live = !pthread_create(&upd_thread, NULL, upd_main, NULL);
+}
+
+static void update_stop(void)
+{
+  if (!upd_live) return;
+  atomic_store(&upd_stop, 1);                      /* aborts a download in progress too */
+  pthread_join(upd_thread, NULL);
+  upd_live = 0;
+  pthread_mutex_lock(&upd_mu);
+  upd_state = UP_IDLE;
+  upd_latest[0] = upd_msg[0] = 0;
+  pthread_mutex_unlock(&upd_mu);
+}
+
+/* X menu > Update: install when there's something to install, else check now */
+static void update_press(void)
+{
+  pthread_mutex_lock(&upd_mu);
+  int st = upd_state, newer = *upd_latest && update_cmp(upd_latest, upd_current()) > 0;
+  pthread_mutex_unlock(&upd_mu);
+  if (st == UP_CHECKING || st == UP_DOWNLOADING || st == UP_INSTALLING || st == UP_INSTALLED || st == UP_RESTART) return;
+  atomic_store(&upd_req, newer ? 2 : 1);
 }
 
 /* ---------- last channel ---------- */
@@ -1136,6 +1353,25 @@ static void draw_qmenu(osd_surface *s)
       break;
     }
     case QM_LIVE: label = "Back to live"; break;
+    case QM_UPDATE: {
+      label = "Update";
+      pthread_mutex_lock(&upd_mu);
+      int st = upd_state;
+      char lt[32];
+      snprintf(lt, sizeof(lt), "%s", upd_latest);
+      pthread_mutex_unlock(&upd_mu);
+      if (st == UP_CHECKING) snprintf(val, sizeof(val), "Checking...");
+      else if (st == UP_CURRENT) snprintf(val, sizeof(val), "Up to date");
+      else if (st == UP_AVAILABLE) snprintf(val, sizeof(val), "Install %s", lt);
+      else if (st == UP_DOWNLOADING) snprintf(val, sizeof(val), "Downloading...");
+      else if (st == UP_INSTALLING) snprintf(val, sizeof(val), "Installing...");
+      else if (st == UP_INSTALLED) snprintf(val, sizeof(val), "Done: reopen");
+      else if (st == UP_RESTART) snprintf(val, sizeof(val), "Restart ReplayOS");
+      else if (st == UP_FAILED) snprintf(val, sizeof(val), "Failed: retry");
+      else snprintf(val, sizeof(val), "Check now");
+      dim = st == UP_INSTALLED || st == UP_RESTART;
+      break;
+    }
     case QM_SLEEP:
       label = "Sleep";
       if (sleep_min) snprintf(val, sizeof(val), "%d min", sleep_min); else snprintf(val, sizeof(val), "Off");
@@ -1393,6 +1629,7 @@ static const char REMOTE_HELP[] =
   "  two screens: add screen=1 or screen=2 to /tune /up /down /last /pause /play /live;\n"
   "  /settings?screen=2 and /set?picture=zoom&leveller=loud&screen=2 read and change\n"
   "  that screen's picture, leveller and audio track without moving the focus;\n"
+  "  /update               is there a newer RetroTV? ?check=1 checks now, ?install=1 installs it\n"
   "  /focus?screen=2 moves the focus (and sound); /swap swaps the two channels;\n"
   "  /set?screen2=on|off\n";
 
@@ -1423,6 +1660,27 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
   case RC_HELP: remote_puts(b, REMOTE_HELP); return 200;
   case RC_NONE: remote_printf(b, "not found\n\n%s", REMOTE_HELP); return 404;
   case RC_BAD: remote_puts(b, "{\"ok\":false,\"error\":\"bad request: see /help\"}"); return 400;
+  case RC_UPDATE: {                                  /* works without channels too */
+    pthread_mutex_lock(&upd_mu);
+    int st = upd_state, newer = *upd_latest && update_cmp(upd_latest, upd_current()) > 0;
+    char lt[32], msg[sizeof(upd_msg)];
+    snprintf(lt, sizeof(lt), "%s", upd_latest);
+    snprintf(msg, sizeof(msg), "%s", upd_msg);
+    pthread_mutex_unlock(&upd_mu);
+    int busy = st == UP_CHECKING || st == UP_DOWNLOADING || st == UP_INSTALLING;
+    if (c->update == 2 && (!newer || busy || st == UP_INSTALLED || st == UP_RESTART)) {
+      remote_puts(b, busy ? "{\"ok\":false,\"error\":\"busy: try again in a moment\"}"
+                          : "{\"ok\":false,\"error\":\"no update to install\"}");
+      return 409;
+    }
+    if (c->update && !busy && st != UP_INSTALLED && st != UP_RESTART) atomic_store(&upd_req, c->update);
+    remote_printf(b, "{\"ok\":true,\"current\":\"%s\",\"latest\":", upd_current());
+    remote_json(b, *lt ? lt : NULL);
+    remote_printf(b, ",\"state\":\"%s\",\"message\":", UP_NAMES[st]);
+    remote_json(b, msg);
+    remote_puts(b, "}");
+    return 200;
+  }
   default: break;
   }
   if (!chans.count) { remote_puts(b, "{\"ok\":false,\"error\":\"no channels loaded\"}"); return 503; }
@@ -1572,6 +1830,10 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     remote_json(b, px ? px->title : NULL);
     pthread_mutex_unlock(&guide_mu);
     remote_printf(b, ",\"channels\":%zu,\"paused\":%s,\"behind\":%d", chans.count, atomic_load(&pub_paused) ? "true" : "false", behind);
+    pthread_mutex_lock(&upd_mu);
+    remote_printf(b, ",\"update\":\"%s\",\"update_latest\":", UP_NAMES[upd_state]);
+    remote_json(b, *upd_latest ? upd_latest : NULL);
+    pthread_mutex_unlock(&upd_mu);
     if (atomic_load(&pub_dual)) {
       int s2on = atomic_load(&pub_s2on), c2 = atomic_load(&pub_cur2), st2 = atomic_load(&pub_state2);
       remote_printf(b, ",\"dual\":true,\"focus\":%d,\"screen2\":{\"on\":%s", atomic_load(&pub_focus) + 1, s2on ? "true" : "false");
@@ -1762,6 +2024,20 @@ static void publish_state(void)
   char note[160];
   zapnow_take_note(note, sizeof(note));
   if (*note) logf_(RETRO_LOG_INFO, "zaparoo: %s", note);
+  atomic_store(&upd_auto, opts.update_check);
+  static int upd_seen = UP_IDLE;
+  pthread_mutex_lock(&upd_mu);
+  int ust = upd_state;
+  char unote[sizeof(upd_note)] = "";
+  if (atomic_exchange(&upd_note_ready, 0)) snprintf(unote, sizeof(unote), "%s", upd_note);
+  pthread_mutex_unlock(&upd_mu);
+  if (*unote) logf_(ust == UP_FAILED ? RETRO_LOG_WARN : RETRO_LOG_INFO, "%s", unote);
+  if (ust != upd_seen) {                             /* a word on the TV when something happens */
+    if (ust == UP_AVAILABLE) show_toast("NEW VERSION");
+    else if (ust == UP_INSTALLED || ust == UP_RESTART) show_toast("UPDATED");
+    else if (ust == UP_FAILED && upd_seen != UP_CHECKING) show_toast("UPDATE FAILED");
+    upd_seen = ust;
+  }
   remote_snap v = { 0 };
   v.sleep_min = sleep_min;
   v.sleep_left = sleep_at ? (int)ceil((sleep_at - t_now()) / SLEEP_UNIT) : 0;
@@ -1857,6 +2133,7 @@ static void handle_input(void)
     if (dir && row == QM_OUTPUT) { set_output(!res240); show_toast(res240 ? "240P" : "480"); }
     if (dir && row == QM_SCREEN2) { set_screen2(!screen2_on); return; }
     if (FACE(PAD_A) && row == QM_SWAP) { swap_screens(); return; }
+    if (dir && row == QM_UPDATE) update_press();
     if (FACE(PAD_A) && row == QM_TESTCARD) { qm_open = 0; testcard_on = 1; tc_t = 0; player_close(pl); }
     if (FACE(PAD_A) && row == QM_HELP) { qm_open = 0; welcome_on = 1; }
     if ((FACE(PAD_A) && row == QM_CLOSE) || FACE(PAD_B) || FACE(PAD_X)) qm_open = 0;
@@ -2034,6 +2311,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   }
   const char *zp = getenv("RETROTV_ZAPAROO_PORT");  /* tests: a stand-in Zaparoo */
   zap_port = zp && atoi(zp) > 0 ? atoi(zp) : 0;
+  atomic_store(&upd_auto, opts.update_check);
+  update_start();
   remote_update();
   return true;          /* show the help screen rather than a cryptic load error */
 }
@@ -2045,6 +2324,7 @@ RETRO_API void retro_unload_game(void)
   log_stats();
   remote_stop();                                     /* it reads chans */
   zapnow_stop();
+  update_stop();
   remote_mode = 0;
   atomic_store(&remote_req, 0);
   remote_missing[0] = '\0';

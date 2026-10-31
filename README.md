@@ -82,6 +82,13 @@ Then:
 2. On the TV, open **RetroTV** in the system list (ReplayOS 2.1.0+). On older ReplayOS, open
    **Extra → audio_video_test** (or **Nintendo Virtual Boy → RetroTV** with `--slot vb`).
 
+**Updates from the TV.** RetroTV checks GitHub once a day for a newer version (turn it off
+with **System Settings → Updates → Check for updates**). When there is one, the channel banner
+says so, and **X → Update → Install** downloads and installs it, without restarting ReplayOS:
+the new version starts the next time you open RetroTV. The phone remote shows an INSTALL
+button too, and `/update` reports it (`?check=1` checks now, `?install=1` installs). Installing is
+always your choice. It runs the release's own installer, which checks the SHA-256 sums first.
+
 **Update** with **Extra → retrotv_update.sh**. **Uninstall** with
 **Extra → retrotv_uninstall.sh**, which removes the RetroTV system and gives borrowed
 slots back (A/V test pattern, Virtual Boy). The RetroTV system survives ReplayOS updates.
@@ -179,6 +186,7 @@ watch: they apply immediately and last until you quit.
 | | Paused picture | VHS tape (a VCR's shaky still frame with a noise bar), Still picture |
 | Remote control | Remote control | This device only, Home network, Off |
 | | Tell Zaparoo what's on | On, Off |
+| Updates | Check for updates | On, Off |
 
 <p align="center">
   <img src="docs/screenshots/theme-teletext.png" width="266" alt="Teletext theme">
