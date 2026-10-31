@@ -164,8 +164,9 @@ static char state_dir[1024];       /* where the core keeps its small files */
 /* Remote control: the server thread resolves a request and leaves it here;
  * retro_run applies it. It reads chans (fixed while it runs) and the two
  * published values below, never the UI state. */
-enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST, RQ_FOCUS, RQ_PAUSE, RQ_LIVE };   /* RQ_PAUSE: channel field 0 play, 1 pause */
-static atomic_int remote_req;          /* kind | screen << 3 (0 focused, 1, 2) | channel index << 5; 0 = nothing */
+enum { RQ_TUNE = 1, RQ_UP, RQ_DOWN, RQ_LAST, RQ_FOCUS, RQ_PAUSE, RQ_LIVE, RQ_SWAP };   /* RQ_PAUSE: channel field 0 play, 1 pause */
+#define RQ(kind, screen, idx) ((kind) | (screen) << 4 | (idx) << 6)
+static atomic_int remote_req;          /* RQ(kind, screen 0 focused/1/2, channel index); 0 = nothing */
 static atomic_int pub_cur = -1;        /* channel on the focused screen, for /status */
 static atomic_int pub_dual, pub_s2on, pub_focus;       /* two screens: mode, screen 2 on, focused screen (0/1) */
 static atomic_int pub_cur2 = -1, pub_state2;           /* the other screen's channel and state */
@@ -1390,7 +1391,8 @@ static const char REMOTE_HELP[] =
   "  two screens: add screen=1 or screen=2 to /tune /up /down /last /pause /play /live;\n"
   "  /settings?screen=2 and /set?picture=zoom&leveller=loud&screen=2 read and change\n"
   "  that screen's picture, leveller and audio track without moving the focus;\n"
-  "  /focus?screen=2 moves the focus (and sound); /set?screen2=on|off\n";
+  "  /focus?screen=2 moves the focus (and sound); /swap swaps the two channels;\n"
+  "  /set?screen2=on|off\n";
 
 /* "now":{"title":..,"start":..,"stop":..},"next":{..} for one channel (guide_mu held) */
 static void remote_now_next(remote_buf *b, const m3u_channel *ch, time_t t)
@@ -1428,12 +1430,22 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     return 409;
   }
   if (c->kind == RC_FOCUS) {
-    atomic_store(&remote_req, RQ_FOCUS | c->screen << 3);
+    atomic_store(&remote_req, RQ(RQ_FOCUS, c->screen, 0));
+    remote_puts(b, "{\"ok\":true}");
+    return 200;
+  }
+  if (c->kind == RC_SWAP) {
+    if (!atomic_load(&pub_dual) || !atomic_load(&pub_s2on)) {
+      remote_puts(b, atomic_load(&pub_dual) ? "{\"ok\":false,\"error\":\"screen 2 is off: /set?screen2=on\"}"
+                                            : "{\"ok\":false,\"error\":\"two screens are off (System Settings)\"}");
+      return 409;
+    }
+    atomic_store(&remote_req, RQ(RQ_SWAP, 0, 0));
     remote_puts(b, "{\"ok\":true}");
     return 200;
   }
   if (c->kind == RC_PAUSE || c->kind == RC_PLAY || c->kind == RC_LIVE) {
-    atomic_store(&remote_req, (c->kind == RC_LIVE ? RQ_LIVE : RQ_PAUSE) | c->screen << 3 | (c->kind == RC_PAUSE) << 5);
+    atomic_store(&remote_req, RQ(c->kind == RC_LIVE ? RQ_LIVE : RQ_PAUSE, c->screen, c->kind == RC_PAUSE));
     remote_puts(b, "{\"ok\":true}");
     return 200;
   }
@@ -1530,7 +1542,7 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
       remote_puts(b, "}");
       return 404;
     }
-    atomic_store(&remote_req, RQ_TUNE | c->screen << 3 | idx << 5);
+    atomic_store(&remote_req, RQ(RQ_TUNE, c->screen, idx));
     remote_puts(b, "{\"ok\":true,\"ch\":");
     remote_json(b, chans.ch[idx].number);
     remote_puts(b, ",\"name\":");
@@ -1538,7 +1550,7 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
     remote_puts(b, "}");
     return 200;
   case RC_UP: case RC_DOWN: case RC_LAST:
-    atomic_store(&remote_req, (c->kind == RC_UP ? RQ_UP : c->kind == RC_DOWN ? RQ_DOWN : RQ_LAST) | c->screen << 3);
+    atomic_store(&remote_req, RQ(c->kind == RC_UP ? RQ_UP : c->kind == RC_DOWN ? RQ_DOWN : RQ_LAST, c->screen, 0));
     remote_puts(b, "{\"ok\":true}");                 /* the channel is known once applied: see /status */
     return 200;
   default: {                                         /* RC_STATUS */
@@ -1682,9 +1694,10 @@ static void remote_apply(void)
   }
   int r = atomic_exchange(&remote_req, 0);
   if (!r || !chans.count) return;
-  int kind = r & 7, target = (r >> 3) & 3;
-  size_t idx = (size_t)(r >> 5);
+  int kind = r & 15, target = (r >> 4) & 3;
+  size_t idx = (size_t)(r >> 6);
   if (kind == RQ_FOCUS) { if (!asleep) set_focus(target - 1); return; }
+  if (kind == RQ_SWAP) { if (!asleep) swap_screens(); return; }
   if (kind == RQ_PAUSE || kind == RQ_LIVE) {         /* the picture on screen: no waking, no clearing */
     int side = target ? target - 1 : focus_side;
     if (asleep || testcard_on || (side != focus_side && !(dual && screen2_on))) return;
