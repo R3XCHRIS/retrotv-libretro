@@ -18,3 +18,12 @@ name = "RetroTV"
 categories = ["Other"]
 lifecycle = "background"
 execute = "bash /media/sd/retrotv/retrotv_launch.sh"
+
+# Channels RetroTV reported as "now playing" (retrotv://<channel>) land in the
+# Zaparoo App's history and recents; this makes LAUNCH there tune that channel
+# (starting RetroTV first if it's off).
+[[launchers.custom]]
+id = "RetroTVChannel"
+schemes = ["retrotv"]
+lifecycle = "background"
+execute = "bash /media/sd/retrotv/retrotv_launch.sh [[media_path]]"

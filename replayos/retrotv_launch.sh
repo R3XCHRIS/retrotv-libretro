@@ -3,6 +3,7 @@
 #
 #   retrotv_launch.sh        start RetroTV (if it isn't running)
 #   retrotv_launch.sh 36     ... and tune channel 36 (instant when it's already on)
+#   retrotv_launch.sh retrotv://36   the same: the form Zaparoo's history passes
 #
 # Needs RetroTV as its own system (ReplayOS 2.1.0+, retrotv_install.sh --slot system)
 # or in the Virtual Boy slot (--slot vb or both): ReplayOS starts it through its own
@@ -29,6 +30,7 @@ rtv_up() { curl -s -m 2 "$RTV/status" >/dev/null 2>&1; }
 
 CH=${1:-}
 [[ $CH == "NULL" ]] && CH=""
+CH=${CH#retrotv://}                                # from Zaparoo's history (what RetroTV reported)
 [[ -z $CH || $CH =~ ^[A-Za-z0-9._-]+$ ]] || { log "not a channel number: $CH"; exit 1; }
 
 if ! status | grep -q '"core_info":"RetroTV'; then
