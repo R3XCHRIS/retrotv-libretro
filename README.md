@@ -14,7 +14,7 @@ real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to in
 
 <p align="center">
   <a href="https://youtu.be/OCvExU21ayg">
-    <img src="https://img.youtube.com/vi/OCvExU21ayg/maxresdefault.jpg" width="640" alt="Watch the demo: Dual-CRT 90s cable TV on Raspberry Pi 5 (YouTube)">
+    <img src="docs/screenshots/two-crts.jpg" width="640" alt="RetroTV on two Sony CRTs: RexToons with the channel banner on one, the TV guide on the other. Click to watch the demo on YouTube">
   </a>
   <br>
   <a href="https://youtu.be/OCvExU21ayg"><b>▶ Watch the demo:</b> two CRTs, one Raspberry Pi 5, 90s cable TV</a>
