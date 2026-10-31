@@ -6,6 +6,7 @@
   <tr><td><b>Regions</b></td><td>Several: pick the list for yours</td></tr>
   <tr><td><b>Channels</b></td><td>183 in the UK list</td></tr>
   <tr><td><b>TV guide</b></td><td>Comes with the playlist</td></tr>
+  <tr><td><b>Best with</b></td><td>One Pluto channel at a time</td></tr>
   <tr><td><b>Playlists</b></td><td><a href="https://github.com/BuddyChewChew/pluto">BuddyChewChew/pluto</a><br>(unofficial)</td></tr>
 </table>
 
@@ -35,9 +36,13 @@ the TV guide. Your other line-ups stay as they are, and each one remembers its o
 
 - **Unofficial lists:** these aren't from Pluto TV, so channels come and go, and a link stops
   working if a file is renamed or moved. RetroTV's setup screen then says what went wrong.
-- **Drop-outs:** every channel in these lists uses the same device ID for everyone who uses
-  them, so Pluto sometimes ends a stream after a minute or two. RetroTV reconnects by itself,
-  holding the picture for a few seconds.
+- **One Pluto channel at a time works best.** These lists give every channel, for everyone who
+  uses them, the same device and session IDs, and Pluto ends streams it sees as duplicates.
+  With [two screens](../README.md#two-screens) both on Pluto, they knock each other out: in tests,
+  each screen dropped about every 20 seconds, against none to a few drops in 5 minutes with one
+  Pluto channel. Pluto on one screen and your other channels on the other is fine.
+- **Drop-outs:** when Pluto ends a stream, RetroTV reconnects by itself, holding the picture for
+  a few seconds.
 - **Region:** pick the list for where you are. Channels from another region's list may not play.
 - **Channel numbers:** each line-up numbers its own channels, so a Zaparoo channel card tunes
   whichever line-up is playing.
