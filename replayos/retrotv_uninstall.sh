@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# RetroTV for ReplayOS - give borrowed slots back: [avtest] to the A/V test
-# pattern, [nintendo_vb] to Virtual Boy and [pibench] (older installs) to PiBench.
-# Removes roms/nintendo_vb/RetroTV.vb and the Zaparoo launcher.
-# Leaves <storage>/retrotv (core copy, playlist, backups) and RetroTV's settings in place.
+# RetroTV for ReplayOS - remove the RetroTV system (ReplayOS 2.1.0+) and give
+# borrowed slots back: [avtest] to the A/V test pattern, [nintendo_vb] to Virtual Boy
+# and [pibench] (older installs) to PiBench.
+# Removes the core and its manifest, roms/nintendo_vb/RetroTV.vb and the Zaparoo launcher.
+# Leaves <storage>/retrotv (core copy, playlist, backups), roms/retrotv (your line-ups)
+# and RetroTV's settings and saves in place.
 set -euo pipefail
 [[ "${1:-}" == "NULL" ]] && shift
 
-CORES=/opt/replay/cores
+CORES=${RETROTV_CORES:-/opt/replay/cores}            # tests point these at a scratch tree
+SD=${RETROTV_SD:-/media/sd}
 CFG=$CORES/cores.cfg
 say() { echo "[retrotv] $*"; }
 die() { echo "[retrotv] ERROR: $*" >&2; exit 1; }
@@ -33,15 +36,18 @@ awk -v vbcore="$VBCORE" '
 cat "$tmp" >"$CFG"
 rm -f "$tmp"
 grep -q retrotv_libretro "$CFG" && die "cores.cfg still mentions RetroTV - check $CFG"
-rm -f "$CORES/retrotv_libretro.so" "$STORAGE/roms/nintendo_vb/RetroTV.vb" "$STORAGE/retrotv/slot.txt"
-rm -f /media/sd/retrotv/retrotv_launch.sh
-if [[ -f /media/sd/zaparoo/launchers/retrotv.toml ]] || grep -qs 'retrotv_launch' /media/sd/zaparoo/config.toml; then
-  rm -f /media/sd/zaparoo/launchers/retrotv.toml
-  Z=/media/sd/zaparoo/config.toml                                   # our allow_execute line
+rm -f "$CORES/retrotv_libretro.cfg" "$CORES/retrotv_libretro.so" "$STORAGE/roms/nintendo_vb/RetroTV.vb" "$STORAGE/retrotv/slot.txt"
+rm -f "$SD/retrotv/retrotv_launch.sh"
+if [[ -f $SD/zaparoo/launchers/retrotv.toml ]] || grep -qs 'retrotv_launch' "$SD/zaparoo/config.toml"; then
+  rm -f "$SD/zaparoo/launchers/retrotv.toml"
+  Z=$SD/zaparoo/config.toml                                         # our allow_execute line
   if grep -qs 'retrotv_launch' "$Z"; then grep -v 'retrotv_launch' "$Z" >"$Z.new" && cat "$Z.new" >"$Z"; rm -f "$Z.new"; fi
   systemctl try-restart zaparoo.service >/dev/null 2>&1 || true
   say "Zaparoo launcher removed"
 fi
-say "[avtest], [nintendo_vb] and [pibench] restored, core removed"
+say "RetroTV system removed; [avtest], [nintendo_vb] and [pibench] restored; core removed"
 say "restarting ReplayOS in 3 s"
-( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &
+# from a systemd timer: nothing of ours is left running on the storage when ReplayOS remounts it
+cd /
+systemd-run --quiet --on-active=3 --unit="retrotv-restart-$(date +%s)" systemctl restart replay.service 2>/dev/null ||
+  ( sleep 3; systemctl restart replay.service ) </dev/null >/dev/null 2>&1 &

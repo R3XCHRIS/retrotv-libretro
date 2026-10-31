@@ -1,44 +1,54 @@
 #!/usr/bin/env bash
-# RetroTV for ReplayOS - install into a borrowed system slot.
+# RetroTV for ReplayOS - install as its own system, or into a borrowed system slot.
 #
-#   retrotv_install.sh [--slot avtest|vb|both]
+#   retrotv_install.sh [--slot system|avtest|vb|both]
 #
+#   system  RetroTV as its own system (ReplayOS 2.1.0 or newer): "RetroTV" in the system
+#           list, with your line-ups as its games (roms/retrotv/*.txt, *.m3u). Remote
+#           start (load_game), the launcher and Zaparoo work. The default on 2.1.0+.
 #   avtest  Extra > audio_video_test (the A/V test pattern's slot). Start it from the menu.
 #   vb      Nintendo Virtual Boy: "RetroTV" is the one game there. ReplayOS can start it
 #           remotely (its load_game API), so the RetroTV launcher and Zaparoo cards work.
 #           Refused if you have Virtual Boy games.
 #   both    both of the above.
-# Without --slot, the last choice (<storage>/retrotv/slot.txt) is kept; the first time, avtest.
+# Without --slot, the last choice (<storage>/retrotv/slot.txt) is kept; the first time,
+# system on ReplayOS 2.1.0+, else avtest.
 #
 # Put this file in <storage>/roms/_extra/ and run it from the ReplayOS
-# Extra menu (or over SSH as root). Re-run it after every ReplayOS update:
-# updates replace /opt/replay, which undoes the install.
+# Extra menu (or over SSH as root). With a borrowed slot, re-run it after every
+# ReplayOS update: updates restore cores.cfg. The system install survives updates.
 #
 # Needs <storage>/retrotv/retrotv_libretro.so (storage = the ReplayOS storage
 # root: /media/nfs, /media/usb, /media/nvme or /media/sd).
 #
 # What it changes (with backups):
 #   /opt/replay/cores/retrotv_libretro.so        added
+#   /opt/replay/cores/retrotv_libretro.cfg       the system's manifest (system; removed otherwise)
+#   <storage>/roms/retrotv/RetroTV.txt           a line-up using retrotv/playlist.txt (system,
+#                                                when the folder has no playlists yet)
 #   /opt/replay/cores/cores.cfg [avtest]         low/mid/hi -> retrotv_libretro.so (avtest, both)
 #   /opt/replay/cores/cores.cfg [nintendo_vb]    low/mid/hi -> retrotv_libretro.so (vb, both)
 #   <storage>/roms/nintendo_vb/RetroTV.vb        the "game" (empty; vb, both)
 #   /opt/replay/cores/cores.cfg [pibench]        back to pibench_libretro.so if an
 #                                                older RetroTV install had taken it
-# A slot no longer chosen gets its own core back. RetroTV's settings and saves are
-# per slot: a new slot starts with a copy of the other's. vb also installs the remote
-# launcher (/media/sd/retrotv/retrotv_launch.sh) and, with Zaparoo, a RetroTV system there.
-# Why these slots: ReplayOS can't add systems, mutes the pibench slot, and its API
-# refuses the Extras systems, so remote start needs a regular system's slot.
+# A slot no longer chosen gets its own core back: an external system can't share its
+# core with cores.cfg. RetroTV's settings and saves are per system: a new one starts
+# with a copy of the previous one's. system and vb also install the remote launcher
+# (/media/sd/retrotv/retrotv_launch.sh) and, with Zaparoo, a RetroTV system there.
+# Why the slots: before 2.1.0 ReplayOS can't add systems, mutes the pibench slot, and
+# its API refuses the Extras systems, so remote start needs a regular system's slot.
 set -euo pipefail
 [[ "${1:-}" == "NULL" ]] && shift   # ReplayOS passes NULL when launched from the menu
 
-CORES=/opt/replay/cores
+CORES=${RETROTV_CORES:-/opt/replay/cores}            # tests point these at a scratch tree
+SD=${RETROTV_SD:-/media/sd}
 CFG=$CORES/cores.cfg
+MANIFEST=$CORES/retrotv_libretro.cfg
 NOW=$(date +%Y%m%d-%H%M%S)
 SLOT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --slot) [[ $# -ge 2 ]] || { echo "[retrotv] ERROR: --slot needs avtest, vb or both" >&2; exit 1; }; SLOT=$2; shift ;;
+    --slot) [[ $# -ge 2 ]] || { echo "[retrotv] ERROR: --slot needs system, avtest, vb or both" >&2; exit 1; }; SLOT=$2; shift ;;
     NULL) ;;
     *) echo "[retrotv] ERROR: unknown option: $1" >&2; exit 1 ;;
   esac
@@ -47,6 +57,20 @@ done
 
 say() { echo "[retrotv] $*"; }
 die() { echo "[retrotv] ERROR: $*" >&2; exit 1; }
+replay_version() { dpkg-query -W -f='${Version}' replay-frontend 2>/dev/null || true; }
+# external systems (a _libretro.cfg manifest next to the core) arrived in ReplayOS 2.1.0
+has_systems() {
+  local v
+  v=$(replay_version)
+  [[ -n $v && $(printf '%s\n' 2.1.0 "$v" | sort -V | head -1) == 2.1.0 ]]
+}
+# restart ReplayOS from a systemd timer: nothing of ours is left running on the
+# storage when ReplayOS remounts it (a busy NFS share pushes it onto the SD card)
+restart_replay() {
+  cd /
+  systemd-run --quiet --on-active=3 --unit="retrotv-restart-$(date +%s)" systemctl restart replay.service 2>/dev/null ||
+    ( sleep 3; systemctl restart replay.service ) </dev/null >/dev/null 2>&1 &
+}
 
 [[ $EUID -eq 0 ]] || die "run as root"
 [[ -f $CFG ]] || die "$CFG not found - is this ReplayOS?"
@@ -65,11 +89,17 @@ SRC=$STORAGE/retrotv/retrotv_libretro.so
 say "core: $SRC"
 
 [[ -z $SLOT && -f $STORAGE/retrotv/slot.txt ]] && SLOT=$(tr -d '[:space:]' <"$STORAGE/retrotv/slot.txt")
-SLOT=${SLOT:-avtest}
-case $SLOT in avtest|vb|both) ;; *) die "--slot must be avtest, vb or both (not '$SLOT')" ;; esac
-WANT_AV=0; WANT_VB=0
+if [[ -z $SLOT ]]; then has_systems && SLOT=system || SLOT=avtest; fi
+case $SLOT in system|avtest|vb|both) ;; *) die "--slot must be system, avtest, vb or both (not '$SLOT')" ;; esac
+if [[ $SLOT == system ]] && ! has_systems; then
+  v=$(replay_version)
+  die "--slot system needs ReplayOS 2.1.0 or newer (this is ${v:-unknown}); use --slot avtest or vb"
+fi
+WANT_SYS=0; WANT_AV=0; WANT_VB=0
+[[ $SLOT == system ]] && WANT_SYS=1
 [[ $SLOT == avtest || $SLOT == both ]] && WANT_AV=1
 [[ $SLOT == vb || $SLOT == both ]] && WANT_VB=1
+REMOTE=$((WANT_SYS | WANT_VB))                       # load_game works for these
 for sec in avtest nintendo_vb; do
   grep -q "^\[$sec\]" "$CFG" || die "no [$sec] section in $CFG - ReplayOS changed; not installing"
 done
@@ -90,6 +120,26 @@ say "backed up cores.cfg"
 install -m 0644 "$SRC" "$CORES/retrotv_libretro.so.new"
 mv -f "$CORES/retrotv_libretro.so.new" "$CORES/retrotv_libretro.so"
 say "installed $CORES/retrotv_libretro.so"
+
+# RetroTV as its own system: the manifest ReplayOS reads at start-up, next to the core
+SYSDIR=$STORAGE/roms/retrotv
+if [[ $WANT_SYS -eq 1 ]]; then
+  printf '%s\n' '# RetroTV as its own system (ReplayOS 2.1.0+). Written by retrotv_install.sh.' \
+    'id = "retrotv"' 'name = "RetroTV"' 'extensions = "m3u|m3u8|txt"' 'devices = "pi5"' >"$MANIFEST.new"
+  chmod 0644 "$MANIFEST.new"
+  mv -f "$MANIFEST.new" "$MANIFEST"
+  mkdir -p "$SYSDIR"
+  if ! find "$SYSDIR" -maxdepth 1 -type f \( -iname '*.txt' -o -iname '*.m3u' -o -iname '*.m3u8' \) ! -name '.*' | grep -q .; then
+    printf '%s\n' '# RetroTV: open this to watch the channels in <storage>/retrotv/playlist.txt.' \
+      '# To make it a line-up of its own, put an M3U link (or a path) on a line below,' \
+      '# and optionally epg=<guide link>. Each .txt or .m3u file here is a line-up.' >"$SYSDIR/RetroTV.txt"
+    say "added $SYSDIR/RetroTV.txt (uses retrotv/playlist.txt)"
+  fi
+  say "registered RetroTV as a system ($MANIFEST)"
+elif [[ -f $MANIFEST ]]; then
+  rm -f "$MANIFEST"
+  say "RetroTV is no longer its own system (manifest removed)"
+fi
 
 # point a slot's low/mid/hi at a core
 set_slot() {
@@ -149,24 +199,26 @@ seed_slot() {   # from to
   fi
   return 0                                         # nothing to copy is fine (set -e)
 }
-[[ $WANT_VB -eq 1 ]] && seed_slot avtest nintendo_vb
-[[ $WANT_AV -eq 1 ]] && seed_slot nintendo_vb avtest
+# (nintendo_vb first: the slot the two-screen setup used)
+[[ $WANT_SYS -eq 1 ]] && { seed_slot nintendo_vb retrotv; seed_slot avtest retrotv; }
+[[ $WANT_VB -eq 1 ]] && { seed_slot retrotv nintendo_vb; seed_slot avtest nintendo_vb; }
+[[ $WANT_AV -eq 1 ]] && { seed_slot retrotv avtest; seed_slot nintendo_vb avtest; }
 
-# Remote start (Virtual Boy slot): the launcher lives on the SD card, because a
-# ReplayOS restart remounts NFS storage and a script running from there blocks it
-LAUNCH=/media/sd/retrotv/retrotv_launch.sh
-if [[ $WANT_VB -eq 1 && -f $STORAGE/retrotv/retrotv_launch.sh ]]; then
-  mkdir -p /media/sd/retrotv
+# Remote start (system or Virtual Boy slot): the launcher lives on the SD card, because
+# a ReplayOS restart remounts NFS storage and a script running from there blocks it
+LAUNCH=$SD/retrotv/retrotv_launch.sh
+if [[ $REMOTE -eq 1 && -f $STORAGE/retrotv/retrotv_launch.sh ]]; then
+  mkdir -p "$SD/retrotv"
   cp "$STORAGE/retrotv/retrotv_launch.sh" "$LAUNCH" && chmod 755 "$LAUNCH"
-elif [[ $WANT_VB -eq 0 ]]; then
+elif [[ $REMOTE -eq 0 ]]; then
   rm -f "$LAUNCH"
 fi
 
 # Zaparoo (optional): "RetroTV" as a system, and **execute cards for channels
-ZDIR=/media/sd/zaparoo
+ZDIR=$SD/zaparoo
 ZRULE="allow_execute = ['^bash /media/sd/retrotv/retrotv_launch\\.sh( [A-Za-z0-9._-]+)?\$']"
 if [[ -d $ZDIR/launchers ]]; then
-  if [[ $WANT_VB -eq 1 && -f $STORAGE/retrotv/retrotv-zaparoo.toml ]]; then
+  if [[ $REMOTE -eq 1 && -f $STORAGE/retrotv/retrotv-zaparoo.toml ]]; then
     cp "$STORAGE/retrotv/retrotv-zaparoo.toml" "$ZDIR/launchers/retrotv.toml"
     if [[ -f $ZDIR/config.toml ]] && ! grep -q 'retrotv_launch' "$ZDIR/config.toml"; then
       cp "$ZDIR/config.toml" "$ZDIR/config.toml.before-retrotv"
@@ -182,18 +234,20 @@ if [[ -d $ZDIR/launchers ]]; then
     fi
     systemctl try-restart zaparoo.service >/dev/null 2>&1 || true
     say "Zaparoo: RetroTV is a system there; channel cards: **execute:bash $LAUNCH <channel>"
-  elif [[ $WANT_VB -eq 0 ]] && { [[ -f $ZDIR/launchers/retrotv.toml ]] || grep -qs 'retrotv_launch' "$ZDIR/config.toml"; }; then
+  elif [[ $REMOTE -eq 0 ]] && { [[ -f $ZDIR/launchers/retrotv.toml ]] || grep -qs 'retrotv_launch' "$ZDIR/config.toml"; }; then
     rm -f "$ZDIR/launchers/retrotv.toml"
     if grep -qs 'retrotv_launch' "$ZDIR/config.toml"; then          # our allow_execute line
       grep -v 'retrotv_launch' "$ZDIR/config.toml" >"$ZDIR/config.toml.new" && cat "$ZDIR/config.toml.new" >"$ZDIR/config.toml"
       rm -f "$ZDIR/config.toml.new"
     fi
     systemctl try-restart zaparoo.service >/dev/null 2>&1 || true
-    say "Zaparoo launcher removed (it needs the Virtual Boy slot)"
+    say "Zaparoo launcher removed (it needs the RetroTV system or the Virtual Boy slot)"
   fi
 fi
 
-if [[ $WANT_AV -eq 1 ]]; then where="Extra > audio_video_test"; else where="Nintendo Virtual Boy > RetroTV"; fi
-[[ $WANT_VB -eq 1 ]] && say "remote start: bash $LAUNCH [channel]"
+if [[ $WANT_SYS -eq 1 ]]; then where="RetroTV in the system list"
+elif [[ $WANT_AV -eq 1 ]]; then where="Extra > audio_video_test"
+else where="Nintendo Virtual Boy > RetroTV"; fi
+[[ $REMOTE -eq 1 ]] && say "remote start: bash $LAUNCH [channel]"
 say "done - restarting ReplayOS in 3 s. Then open $where."
-( sleep 3; systemctl restart replay.service ) >/dev/null 2>&1 &
+restart_replay

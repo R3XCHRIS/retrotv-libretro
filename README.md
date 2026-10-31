@@ -61,10 +61,13 @@ curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/
 ReplayOS storage (the SD card, USB drive or network share), then run
 **Extra → retrotv_update.sh**.
 
-**Where RetroTV goes** (see [Which slot](#which-slot-av-test-or-virtual-boy)): add
-`-s -- --slot vb` or `--slot both` to the one-liner, e.g.
+**Where RetroTV goes** (see [Where RetroTV goes](#where-retrotv-goes-its-own-system-or-a-borrowed-slot)):
+on **ReplayOS 2.1.0 or newer**, RetroTV becomes **its own system**, "RetroTV" in the
+system list. On older ReplayOS it borrows a slot: add `-s -- --slot vb` or `--slot both`
+to the one-liner, e.g.
 `curl -fsSL https://raw.githubusercontent.com/chris-skitch/retrotv-libretro/main/install.sh | bash -s -- --slot both`.
-Without it you get the A/V test slot; updates keep your choice.
+Without it you get the A/V test slot. Updates keep your choice: after upgrading to
+ReplayOS 2.1.0, move a slot install over with `--slot system`.
 
 Either way, the installer:
 - downloads the latest release and checks its SHA-256 sums;
@@ -76,12 +79,14 @@ Either way, the installer:
 Then:
 
 1. Open `retrotv/playlist.txt` on your storage and put your playlist link on its own line (see below).
-2. On the TV, open **Extra → audio_video_test** (or **Nintendo Virtual Boy → RetroTV** with `--slot vb`).
+2. On the TV, open **RetroTV** in the system list (ReplayOS 2.1.0+). On older ReplayOS, open
+   **Extra → audio_video_test** (or **Nintendo Virtual Boy → RetroTV** with `--slot vb`).
 
 **Update** with **Extra → retrotv_update.sh**. **Uninstall** with
-**Extra → retrotv_uninstall.sh**, which gives the slots back (A/V test pattern,
-Virtual Boy). Re-run the installer after a ReplayOS update, because updates replace the
-system files.
+**Extra → retrotv_uninstall.sh**, which removes the RetroTV system and gives borrowed
+slots back (A/V test pattern, Virtual Boy). The RetroTV system survives ReplayOS updates.
+With a borrowed slot, re-run the installer after a ReplayOS update, because updates
+restore the slots.
 
 ## Your channels: `playlist.txt`
 
@@ -95,6 +100,11 @@ http://<dispatcharr>:9191/output/m3u/<channel-profile>
 # or Tunarr
 http://<tunarr>:8088/api/channels.m3u
 ```
+
+**More than one line-up (ReplayOS 2.1.0+).** The RetroTV system lists the files in
+`roms/retrotv/` as its games. The installer adds `RetroTV.txt`, which uses
+`retrotv/playlist.txt`. Add more files for more line-ups, each with its own last channel:
+a `.txt` written like `playlist.txt` (a link, and optionally `epg=`), or an `.m3u` file.
 
 **TV guide.** RetroTV uses the guide link in the playlist (`x-tvg-url`)
 automatically. To use a different guide, or if your playlist has none, add an
@@ -202,7 +212,8 @@ With two CRTs on the Pi 5's two HDMI ports, RetroTV can play a channel on each.
 2. Open RetroTV, go to **System Settings → Picture → Two screens (dual mode) → On**, save, and quit RetroTV.
 3. Open RetroTV again. In the ReplayOS in-game menu, **Replay Options → Multi screen → Dual horizontal**,
    then **Save system settings**, so only RetroTV uses it (your games keep their own setting). Quit
-   and open RetroTV once more. With both slots, do this in each (settings are per slot).
+   and open RetroTV once more. Settings are per system: with both slots, do this in each.
+   Moving to the RetroTV system (ReplayOS 2.1.0+) copies them over.
    Keep the global Multi screen on **Dual smart** or off: as the global setting, Dual horizontal
    makes the main CRT flicker in everything.
 4. Don't use an `_autostart` file with this: ReplayOS 2.0.60 crashes at start-up when the autostarted
@@ -280,8 +291,8 @@ from the sleep timer, and on the channel already playing just shows the banner.
 
 ## Remote start and Zaparoo
 
-With the **Virtual Boy slot**, RetroTV can be started from anywhere on the Pi,
-without autostart or restarting ReplayOS:
+As **its own system** (ReplayOS 2.1.0+) or in the **Virtual Boy slot**, RetroTV can be
+started from anywhere on the Pi, without autostart or restarting ReplayOS:
 
 ```bash
 bash /media/sd/retrotv/retrotv_launch.sh 36
@@ -312,7 +323,8 @@ echo /roms/avtest/retrotv.lr > /media/nfs/roms/_autostart/audio_video_test.lr
 
 Delete `roms/_autostart/audio_video_test.lr` to stop it. The path in the file is relative
 to your storage and starts with `/`. The `avtest` folder name is what tells
-ReplayOS to use RetroTV. Don't combine autostart with RetroTV's own Multi screen
+ReplayOS to use RetroTV. As its own system (ReplayOS 2.1.0+), name a line-up instead:
+`echo /roms/retrotv/RetroTV.txt > /media/nfs/roms/_autostart/audio_video_test.lr`. Don't combine autostart with RetroTV's own Multi screen
 setting for two screens: ReplayOS 2.0.60 crashes at start-up (see [Two screens](#two-screens)).
 
 ## Servers
@@ -325,20 +337,24 @@ setting for two screens: ReplayOS 2.0.60 crashes at start-up (see [Two screens](
   single channel's video). The guide comes along.
 - **Anything else:** an M3U with HTTP(S) MPEG-TS or HLS streams. Add `epg=` for a guide.
 
-## Which slot: A/V test or Virtual Boy
+## Where RetroTV goes: its own system or a borrowed slot
 
-ReplayOS can't add new systems yet, so RetroTV borrows one (or both) of these:
+ReplayOS 2.1.0 added external systems, so RetroTV gets its own entry there. Older
+ReplayOS can't add systems, so RetroTV borrows one (or both) of its slots:
 
 | Slot | Opens from | You lose | Remote start |
 |---|---|---|---|
-| `--slot avtest` (default) | **Extra → audio_video_test** | the A/V test pattern | no: ReplayOS's API refuses Extras |
+| `--slot system` (default on 2.1.0+) | **RetroTV** in the system list | nothing | yes: launcher and Zaparoo |
+| `--slot avtest` (default before 2.1.0) | **Extra → audio_video_test** | the A/V test pattern | no: ReplayOS's API refuses Extras |
 | `--slot vb` | **Nintendo Virtual Boy → RetroTV** | Virtual Boy emulation (refused if you have Virtual Boy games) | yes: launcher and Zaparoo |
 | `--slot both` | both | both | yes |
 
-RetroTV's System Settings and saves are kept per slot; a slot used for the first
-time starts with a copy of the other one's. The PiBench slot was tried first, but
-ReplayOS mutes its sound. The uninstaller gives the slots back. A proper RetroTV
-entry needs a user-cores option in ReplayOS itself.
+As a system, RetroTV is registered by `/opt/replay/cores/retrotv_libretro.cfg` next to
+the core, and the installer gives any borrowed slot back (an external system can't
+share its core with a slot). RetroTV's System Settings and saves are kept per system;
+a new one starts with a copy of the previous one's, so your two-screen setup and last
+channel come along. The PiBench slot was tried first, but ReplayOS mutes its sound.
+The uninstaller removes the system and gives the slots back.
 
 ## Troubleshooting
 

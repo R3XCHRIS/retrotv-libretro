@@ -59,6 +59,7 @@ test: | build
 	build/test_remote
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_vsmooth tests/test_vsmooth.c src/vsmooth.c -lm
 	build/test_vsmooth
+	tests/test_install.sh
 
 check: $(FFINC)/.tag | build
 	$(HOSTCC) $(CFLAGS) -Werror -fsyntax-only $(SRCS)

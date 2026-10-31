@@ -188,7 +188,20 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   and ReplayOS falls back to `system_storage = "sd"` (systems list empties). So the launcher
   lives on the SD card and channel cards use `**execute` (allow_execute), not launches.
   `audio_system_volume = "0"` in replay.cfg means volume **Off** (scale 10…0).
-- The long-term fix is an official "user cores" hook from the ReplayOS author.
+- **ReplayOS 2.1.0 external systems** (the author's user-cores hook; **verified on the Pi
+  2026-10-31**: system list entry, load_game, sound, System Settings, two screens with the copied
+  Dual horizontal setting, last channel; FFmpeg still 7.1): a `retrotv_libretro.cfg` next to the core in
+  `/opt/replay/cores/` (four quoted fields: `id = "retrotv"`, `name`, `extensions = "m3u|m3u8|txt"`,
+  `devices = "pi5"`; unknown or repeated fields are rejected; regular files, no symlinks) makes
+  RetroTV its own system, read only at frontend start-up (restart RePlay). Its "games" are the files in
+  `roms/retrotv/`: RetroTV already takes a launched `.m3u`, a `.txt` like playlist.txt, or a
+  comment-only `.txt` (→ `retrotv/playlist.txt`). Saves/settings use the id (`saves/retrotv/`,
+  `config/settings/system/<crt|lcd>/retrotv.cfg`). OTA updates keep unowned files in the cores
+  folder. An external system can't pair with a library `cores.cfg` uses, so the installer gives
+  the borrowed slots back. `retrotv_install.sh --slot system` (default on 2.1.0+, from
+  `dpkg-query replay-frontend`) does all this, seeds settings/saves from nintendo_vb/avtest and
+  restarts via `systemd-run` (nothing left running on NFS). Launcher: `load_game?system=retrotv&
+  game_file=RetroTV.txt`. `tests/test_install.sh` tests the scripts in a fake root (`unshare -r`).
 
 ## Roadmap and design
 
