@@ -273,6 +273,7 @@ Fit/Zoom and 480/240p, the same as the X menu on the TV.
 | `/settings?screen=2`, `/set?picture=zoom&screen=2` | with two screens: read or change that screen's picture (Fit/Zoom), volume leveller and audio track without moving the focus or the sound. The reply has `"screen": 2`. Each screen keeps its own leveller, used while it has the focus. `sleep`, `output` and `screen2` always apply to the whole box |
 | `/focus?screen=2` | move the focus (and the sound) to screen 2 |
 | `/set?screen2=on` | turn screen 2 on or off |
+| `/swap` | swap the two screens' channels; you keep hearing the screen you were on (X → Swap screens) |
 
 ```bash
 curl http://127.0.0.1:7474/tune?ch=36

@@ -43,6 +43,7 @@ button:active { background: var(--sel); transform: translateY(1px); }
 button[aria-expanded="true"] { border-color: var(--gold); color: var(--gold); }
 
 .focus { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+#focus { grid-template-columns: 1fr 1fr 1fr; }
 .focus[hidden] { display: none; }
 .focus button { padding: 10px 0; font-size: 13px; }
 .focus button.on { background: var(--gold); color: #0a1640; border-color: var(--gold); }
@@ -106,8 +107,10 @@ footer { color: var(--muted); font: 12px var(--mono); text-align: center; margin
   <div class="focus" id="focus" hidden>
     <button id="f1" aria-label="Control screen 1">SCREEN 1</button>
     <button id="f2" aria-label="Control screen 2">SCREEN 2</button>
+    <button id="swap" aria-label="Swap the two screens' channels">SWAP</button>
   </div>
   <div class="settings" id="settings" hidden>
+    <div class="row" id="r-pic" hidden><div class="lbl">Settings for <em>audio, leveller, picture</em></div><div class="seg" id="s-pic"></div></div>
     <div class="row"><div class="lbl">Sleep timer <em id="sleepleft"></em></div><div class="seg" id="s-sleep"></div></div>
     <div class="row"><div class="lbl">Audio track</div><div class="seg" id="s-audio"></div></div>
     <div class="row"><div class="lbl">Volume leveller</div><div class="seg" id="s-leveller"></div></div>
@@ -126,6 +129,8 @@ footer { color: var(--muted); font: 12px var(--mono); text-align: center; margin
 "use strict";
 const $ = id => document.getElementById(id);
 let chans = [], current = null, filter = "", settings = null;
+let pic = 0;                                         /* two screens: whose audio/leveller/picture the panel shows (0 = the focused one) */
+const PER_PICTURE = ["audio", "leveller", "picture"];
 
 function hhmm(t) {
   return new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -284,7 +289,7 @@ function seg(id, choices, cur, param) {
   for (const [val, label] of choices) {
     const b = el("button", String(val) === String(cur) ? "on" : "", label);
     b.setAttribute("aria-pressed", String(val) === String(cur));
-    b.onclick = () => change(param + "=" + encodeURIComponent(val));
+    b.onclick = () => change(param + "=" + encodeURIComponent(val) + (pic && PER_PICTURE.includes(param) ? "&screen=" + pic : ""));
     box.appendChild(b);
   }
 }
@@ -301,12 +306,30 @@ function renderSettings() {
   $("r-output").hidden = !!s.dual;                  /* fixed picture size with two screens */
   $("r-screen2").hidden = !s.dual;
   if (s.dual) seg("s-screen2", [["off", "Off"], ["on", "On"]], s.screen2, "screen2");
+  $("r-pic").hidden = !pic;
+  if (pic) {                                         /* changes that picture without moving the sound */
+    const box = $("s-pic");
+    box.textContent = "";
+    for (const n of [1, 2]) {
+      const b = el("button", n === pic ? "on" : "", "Screen " + n + (n === s.focus ? " \u266A" : ""));
+      b.setAttribute("aria-pressed", n === pic);
+      b.onclick = () => { pic = n; loadSettings(); };
+      box.appendChild(b);
+    }
+  }
 }
 
 async function loadSettings() {
   if ($("settings").hidden) return;
-  try { settings = await call("/settings"); renderSettings(); }
-  catch (e) { showMsg("Settings: " + e.message); }
+  try {
+    let s = await call("/settings");
+    if (s.dual && s.screen2 === "on") {
+      if (!pic) pic = s.focus;
+      if (pic !== s.focus) s = await call("/settings?screen=" + pic);
+    } else pic = 0;
+    settings = s;
+    renderSettings();
+  } catch (e) { showMsg("Settings: " + e.message); }
 }
 
 async function change(q) {
@@ -319,10 +342,11 @@ $("gear").onclick = () => {
   const open = $("settings").hidden;
   $("settings").hidden = !open;
   $("gear").setAttribute("aria-expanded", open);
-  if (open) loadSettings();
+  if (open) { pic = 0; loadSettings(); }             /* opens on the screen you hear */
 };
 $("f1").onclick = () => tune("/focus?screen=1");
 $("f2").onclick = () => tune("/focus?screen=2");
+$("swap").onclick = () => tune("/swap");
 $("up").onclick = () => tune("/up");
 $("down").onclick = () => tune("/down");
 $("last").onclick = () => tune("/last");

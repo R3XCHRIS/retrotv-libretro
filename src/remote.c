@@ -125,6 +125,7 @@ void remote_parse(const char *req, remote_cmd *c)
   else if (IS("/settings")) c->kind = RC_SETTINGS;
   else if (IS("/set")) c->kind = parse_set(q, qlen, c) ? RC_BAD : RC_SET;
   else if (IS("/focus")) c->kind = RC_FOCUS;
+  else if (IS("/swap")) c->kind = RC_SWAP;
   else if (IS("/up")) c->kind = RC_UP;
   else if (IS("/down")) c->kind = RC_DOWN;
   else if (IS("/last")) c->kind = RC_LAST;
