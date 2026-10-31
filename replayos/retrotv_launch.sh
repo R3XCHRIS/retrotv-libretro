@@ -65,6 +65,10 @@ for _ in $(seq 1 40); do rtv_up && break; sleep 1; done    # remote control up =
 rtv_up || { log "RetroTV started, but its remote control doesn't answer (System Settings > Remote control?)"; exit 0; }
 if [[ -n $CH ]]; then
   log "tuning channel $CH"
-  curl -s -m 3 "$RTV/tune?ch=$CH" >/dev/null
+  r=$(curl -s -m 3 "$RTV/tune?ch=$CH")
+  if [[ $r != *'"ok":true'* ]]; then              # e.g. a card for a channel the line-up no longer has
+    log "RetroTV didn't tune channel $CH: ${r:-no answer}"
+    exit 1
+  fi
 fi
 exit 0
