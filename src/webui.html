@@ -47,6 +47,10 @@ button[aria-expanded="true"] { border-color: var(--gold); color: var(--gold); }
 .focus[hidden] { display: none; }
 .focus button { padding: 10px 0; font-size: 13px; }
 .focus button.on { background: var(--gold); color: #0a1640; border-color: var(--gold); }
+.upd { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-top: 10px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--gold); border-radius: 6px; font-size: 14px; }
+.upd[hidden] { display: none; }
+.upd button { padding: 8px 12px; font-size: 13px; flex: 0 0 auto; }
+.upd button[hidden] { display: none; }
 .settings { margin-top: 10px; background: var(--panel); border-radius: 6px; padding: 4px 12px 10px; }
 .settings[hidden] { display: none; }
 .row { padding: 8px 0; border-bottom: 1px solid #111d4a; }
@@ -118,6 +122,7 @@ footer { color: var(--muted); font: 12px var(--mono); text-align: center; margin
     <div class="row" id="r-output"><div class="lbl">Output</div><div class="seg" id="s-output"></div></div>
     <div class="row" id="r-screen2" hidden><div class="lbl">Screen 2</div><div class="seg" id="s-screen2"></div></div>
   </div>
+  <div class="upd" id="upd" hidden><span id="updtxt"></span><button id="updbtn">INSTALL</button></div>
   <div class="msg" id="msg"></div>
 </header>
 <main>
@@ -265,6 +270,16 @@ async function refresh() {
     $("pp").dataset.paused = s.paused ? "1" : "";
     $("live").textContent = s.behind > 0 ? "LIVE (-" + Math.floor(s.behind / 60) + ":" + String(s.behind % 60).padStart(2, "0") + ")" : "LIVE";
     $("live").className = s.behind > 0 ? "on" : "";
+    const v = s.update_latest || "";               /* a newer RetroTV */
+    const ut = { available: "RetroTV " + v + " is available", downloading: "Downloading RetroTV " + v + "\u2026",
+                 installing: "Installing RetroTV " + v + "\u2026", installed: "RetroTV " + v + " installed: reopen RetroTV to use it",
+                 restart: "RetroTV " + v + " installed: restart ReplayOS to finish", failed: "The update didn't install" }[s.update];
+    $("upd").hidden = !ut;
+    if (ut) {
+      $("updtxt").textContent = ut;
+      $("updbtn").hidden = !(s.update === "available" || s.update === "failed");
+      $("updbtn").textContent = s.update === "failed" ? "TRY AGAIN" : "INSTALL";
+    }
     if (s.ch !== current) { current = s.ch; render(); loadSettings(); }
     showMsg("");
   } catch (e) {
@@ -347,6 +362,10 @@ $("gear").onclick = () => {
 $("f1").onclick = () => tune("/focus?screen=1");
 $("f2").onclick = () => tune("/focus?screen=2");
 $("swap").onclick = () => tune("/swap");
+$("updbtn").onclick = async () => {
+  try { await call("/update?install=1"); } catch (e) { showMsg(e.message); return; }
+  setTimeout(refresh, 300);
+};
 $("up").onclick = () => tune("/up");
 $("down").onclick = () => tune("/down");
 $("last").onclick = () => tune("/last");

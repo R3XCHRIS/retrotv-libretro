@@ -85,6 +85,14 @@ check 'grep -q multi_mode "$ST/config/settings/system/crt/retrotv.cfg"'
 check '[[ $(cat "$ST/saves/retrotv/retrotv-last-1234abcd.txt") == 5 ]]'
 check '[[ -x $SDC/retrotv/retrotv_launch.sh && -f $SDC/zaparoo/launchers/retrotv.toml ]]'
 
+case="--no-restart (RetroTV's own updater)"
+fresh
+run 2.1.0 retrotv_install.sh --no-restart
+check '[[ $? -eq 3 && ! -f $T/log ]] && grep -q "restart ReplayOS to finish" "$T/out"'     # new system: restart needed
+run 2.1.0 retrotv_install.sh --no-restart
+check '[[ $? -eq 0 && ! -f $T/log ]] && grep -q "next time you open RetroTV" "$T/out"'     # an update: none
+check '[[ -f $CORES/retrotv_libretro.cfg && $(cat "$ST/retrotv/slot.txt") == system ]]'
+
 case="your own line-ups are left alone"
 fresh
 mkdir -p "$ST/roms/retrotv"

@@ -126,6 +126,12 @@ void remote_parse(const char *req, remote_cmd *c)
   else if (IS("/set")) c->kind = parse_set(q, qlen, c) ? RC_BAD : RC_SET;
   else if (IS("/focus")) c->kind = RC_FOCUS;
   else if (IS("/swap")) c->kind = RC_SWAP;
+  else if (IS("/update")) {
+    char v[8];
+    c->kind = RC_UPDATE;
+    if (query_get(q, qlen, "install", v, sizeof(v)) && !strcmp(v, "1")) c->update = 2;
+    else if (query_get(q, qlen, "check", v, sizeof(v)) && !strcmp(v, "1")) c->update = 1;
+  }
   else if (IS("/up")) c->kind = RC_UP;
   else if (IS("/down")) c->kind = RC_DOWN;
   else if (IS("/last")) c->kind = RC_LAST;
