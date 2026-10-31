@@ -879,6 +879,29 @@ int player_open_track(player *pl, const char *url, int audio_track)
 
 int player_open(player *pl, const char *url) { return player_open_track(pl, url, -1); }
 
+int player_reconnect(player *pl)
+{
+  stream *old = pl->cur;
+  if (!old || !old->url) return -1;
+  stream *s = stream_create(&pl->zoom, &pl->margin);
+  if (!s) return -1;
+  pthread_mutex_lock(&old->mu);
+  int had = old->have_shown;
+  if (had) memcpy(s->shown, old->shown, (size_t)PLAYER_W * PLAYER_H * 4);
+  int track = old->info.naudio > 1 ? old->info.audio_cur : old->want_audio;
+  pthread_mutex_unlock(&old->mu);
+  char *url = strdup(old->url);
+  retire(pl, old);
+  pl->cur = s;
+  if (!url) return -1;
+  int rc = stream_open(s, url, track);
+  free(url);
+  pthread_mutex_lock(&s->mu);
+  s->have_shown = had;                               /* the last picture stays up meanwhile */
+  pthread_mutex_unlock(&s->mu);
+  return rc;
+}
+
 void player_close(player *pl)
 {
   retire(pl, pl->cur);

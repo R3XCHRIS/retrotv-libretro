@@ -116,6 +116,12 @@ static guide_view gv;
 static size_t list_cursor;
 static uint16_t pad_prev;
 static int logged_playing, logged_error, logged_attempt;
+/* A live stream that ends or drops after playing is reconnected (IPTV streams
+ * don't really end: Pluto-style sessions expire, servers restart). Three quick
+ * failures in a row (playing under RECONNECT_GOOD s each) and it's NO SIGNAL. */
+#define RECONNECT_GOOD 10.0
+#define RECONNECT_TRIES 3
+static int reconnecting, reconnect_streak;
 
 /* Two screens (dual mode): one 1280x480 picture that ReplayOS's "Dual
  * horizontal" splits across two CRTs. The globals above (pl, cur, prev,
@@ -131,6 +137,7 @@ typedef struct {
   int logged_playing, logged_error, logged_attempt;
   int saved_idx;
   char last_path[1100];
+  int reconnecting, reconnect_streak;
 } screen_state;
 static int dual;                       /* dual mode this session (opts.dual at load) */
 static int screen2_on;                 /* screen 2 playing; off = standby card */
@@ -289,6 +296,7 @@ static void tune(size_t idx)
   banner_until = t_now() + opts.banner_secs;
   logged_playing = logged_error = 0;
   logged_attempt = 1;
+  reconnecting = reconnect_streak = 0;
   logf_(RETRO_LOG_INFO, "%stune ch %s \"%s\"", stag(), chans.ch[cur].number, chans.ch[cur].name);
   if (gside == focus_side) {                         /* the screen you hear */
     loud_reset(&loud);
@@ -1433,12 +1441,13 @@ static double sleep_level(void)
 static void swap_state(int keep_paths)
 {
   screen_state g = { pl, cur, prev, zoom, opts.leveller, banner_until, played_at, logged_playing, logged_error, logged_attempt,
-                     saved_idx, "" };
+                     saved_idx, "", reconnecting, reconnect_streak };
   memcpy(g.last_path, last_path, sizeof(g.last_path));
   pl = other.pl; cur = other.cur; prev = other.prev; zoom = other.zoom; opts.leveller = other.leveller;
   banner_until = other.banner_until; played_at = other.played_at;
   logged_playing = other.logged_playing; logged_error = other.logged_error; logged_attempt = other.logged_attempt;
   saved_idx = other.saved_idx;
+  reconnecting = other.reconnecting; reconnect_streak = other.reconnect_streak;
   memcpy(last_path, other.last_path, sizeof(last_path));
   other = g;
   if (keep_paths) {                                  /* the files and levellers stay with their screens */
@@ -1523,7 +1532,23 @@ static void screen_status(player_state st)
     logf_(RETRO_LOG_WARN, "%sch %s attempt %d failed (%s), retrying", stag(), chans.ch[cur].number, att - 1, why);
     logged_attempt = att;
   }
+  if (st == PLAYER_ERROR && logged_playing) {          /* it was playing: reconnect, holding the picture */
+    double ran = t_now() - played_at;
+    reconnect_streak = ran >= RECONNECT_GOOD ? 0 : reconnect_streak + 1;
+    if (reconnect_streak < RECONNECT_TRIES) {
+      logf_(RETRO_LOG_WARN, "%sch %s %s after %.0fs: reconnecting", stag(), chans.ch[cur].number, player_error(pl), ran);
+      player_reconnect(pl);
+      reconnecting = 1;
+      logged_playing = logged_error = 0;
+      logged_attempt = 1;
+      return;
+    }
+    logf_(RETRO_LOG_WARN, "%sch %s keeps dropping (%d times within %.0fs): giving up", stag(), chans.ch[cur].number,
+          RECONNECT_TRIES, RECONNECT_GOOD);
+    logged_playing = 0;
+  }
   if (st == PLAYER_ERROR && !logged_error) {
+    reconnecting = 0;
     logf_(RETRO_LOG_WARN, "%sch %s NO SIGNAL after %.1fs: %s", stag(), chans.ch[cur].number, player_tuning_seconds(pl), player_error(pl));
     logged_error = 1;
   }
@@ -1534,7 +1559,9 @@ static void screen_status(player_state st)
           player_tuning_seconds(pl), in.width, in.height, in.vcodec, in.fps, in.acodec, in.native ? ", native" : "");
     logged_playing = 1;
     played_at = t_now();
-    banner_until = t_now() + opts.banner_secs;   /* show what came on */
+    if (reconnecting) logf_(RETRO_LOG_INFO, "%sch %s back", stag(), chans.ch[cur].number);
+    else banner_until = t_now() + opts.banner_secs;   /* show what came on (not after a reconnect) */
+    reconnecting = 0;
     if (gside == focus_side) follow_refresh(in.fps);
   }
   if (st == PLAYER_PLAYING && logged_playing && stream_fps <= 0 && gside == focus_side) {   /* frame rate measured after it started */
@@ -1605,7 +1632,7 @@ static void other_frame(void)
     if (opts.static_vhs) osd_static_vhs(&s2, &noise2, (unsigned)frame_no);
     else osd_static(&s2, &noise2);
   }
-  if (st != PLAYER_PLAYING || t_now() < banner_until) draw_banner(&s2, st);
+  if ((st != PLAYER_PLAYING && !reconnecting) || t_now() < banner_until) draw_banner(&s2, st);
   shift_tick();
   player_shift sh;
   player_get_shift(pl, &sh);
@@ -2461,7 +2488,7 @@ RETRO_API void retro_run(void)
     }
   }
 
-  int show_banner = st != PLAYER_PLAYING || t_now() < banner_until;
+  int show_banner = (st != PLAYER_PLAYING && !reconnecting) || t_now() < banner_until;
   if (welcome_on) draw_welcome(&s);
   else if (qm_open) draw_qmenu(&s);
   else if (guide_open) {
