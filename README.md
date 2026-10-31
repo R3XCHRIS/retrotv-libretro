@@ -348,6 +348,11 @@ starting with `/`). See the caution under [Two screens](#two-screens) first.
 - **No guide:** check the playlist has `x-tvg-url`, or add `epg=`.
 - **A channel stays on TUNING:** cold IPTV channels can take 5–10 s, and RetroTV
   retries 3 times before NO SIGNAL.
+- **A channel freezes for a few seconds, then carries on:** the stream ended or dropped
+  (a server restart, or a session the provider closed) and RetroTV reconnected, holding
+  the last picture meanwhile. If it drops three times in quick succession, you get NO SIGNAL.
+  Unofficial playlists that give every user the same device ID (some Pluto TV lists) drop
+  more often.
 - **Log:** `/tmp/retrotv.log` on the Pi (`ssh root@replay.local`).
 
 ## Build

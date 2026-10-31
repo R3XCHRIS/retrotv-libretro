@@ -34,6 +34,10 @@ headless test frontend (`tests/harness.c`) runs it anywhere (see "Deploying into
 - Dispatcharr streams are MPEG-TS over HTTP (H.264 + AAC/AC-3; some PAL 50 fps).
   A cold channel can take ~3–10 s to deliver its first byte, and occasionally
   fails one attempt with "Invalid data found when processing input". The core retries.
+- Live streams can "end": a provider closes the session (Pluto via a public list with one shared
+  deviceId serves an empty playlist with `#EXT-X-ENDLIST` after a while) or a server restarts.
+  RetroTV reconnects a stream that was playing (`player_reconnect` keeps the last picture up);
+  three drops within 10 s of play each → NO SIGNAL.
 - Measured on the Pi with the harness: tune-to-picture 4–7 s cold and ~0.1 s warm,
   `retro_run` 1–3 ms normally, at most 7 threads (no leak across channel changes).
 

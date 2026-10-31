@@ -45,6 +45,10 @@ void player_destroy(player *p);
 int player_open(player *p, const char *url);
 /* Same, preferring the audio_track-th audio track (0-based; -1 = the best one). */
 int player_open_track(player *p, const char *url, int audio_track);
+/* Open the same URL again (same audio track) after a live stream ended or
+ * dropped, showing the last picture until the new one plays. -1 if there's
+ * nothing to reopen. */
+int player_reconnect(player *p);
 /* Stop and join the thread. Safe to call when idle. */
 void player_close(player *p);
 
