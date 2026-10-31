@@ -28,6 +28,7 @@
 #include "osd.h"
 #include "player.h"
 #include "remote.h"
+#include "zapnow.h"
 #include "webui.h"
 
 #define RETROTV_VERSION "0.3.0"
@@ -173,6 +174,7 @@ static atomic_int pub_paused, pub_behind, pub_paused2, pub_behind2;   /* pause: 
 enum { PS_TUNING, PS_PLAYING, PS_NO_SIGNAL, PS_OFF, PS_TESTCARD, PS_NO_CHANNELS };
 static atomic_int pub_state = PS_NO_CHANNELS;
 static int remote_mode;                /* what the server runs as: opts.remote values */
+static int zap_port;                   /* Zaparoo's API port (RETROTV_ZAPAROO_PORT for tests) */
 /* Settings from the phone page: retro_run publishes a snapshot for the server
  * thread, which leaves requested changes in rset for retro_run to apply. */
 typedef struct {
@@ -1723,6 +1725,14 @@ static void publish_state(void)
   atomic_store(&pub_paused2, sh.paused);
   atomic_store(&pub_behind2, (int)sh.behind);
   if (frame_no % 15) return;                         /* settings: 4 times a second is plenty */
+  if (opts.zaparoo && st == PS_PLAYING) {            /* Zaparoo's "now playing" (sent only when it changes) */
+    char zn[160];
+    snprintf(zn, sizeof(zn), "RetroTV: %s %s", chans.ch[cur].number, chans.ch[cur].name);
+    zapnow_report(zn, chans.ch[cur].number, zap_port);
+  }
+  char note[160];
+  zapnow_take_note(note, sizeof(note));
+  if (*note) logf_(RETRO_LOG_INFO, "zaparoo: %s", note);
   remote_snap v = { 0 };
   v.sleep_min = sleep_min;
   v.sleep_left = sleep_at ? (int)ceil((sleep_at - t_now()) / SLEEP_UNIT) : 0;
@@ -1993,6 +2003,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
   } else {
     logf_(RETRO_LOG_WARN, "no channels: %s", help_reason);
   }
+  const char *zp = getenv("RETROTV_ZAPAROO_PORT");  /* tests: a stand-in Zaparoo */
+  zap_port = zp && atoi(zp) > 0 ? atoi(zp) : 0;
   remote_update();
   return true;          /* show the help screen rather than a cryptic load error */
 }
@@ -2003,6 +2015,7 @@ RETRO_API void retro_unload_game(void)
 {
   log_stats();
   remote_stop();                                     /* it reads chans */
+  zapnow_stop();
   remote_mode = 0;
   atomic_store(&remote_req, 0);
   atomic_store(&pub_cur, -1);

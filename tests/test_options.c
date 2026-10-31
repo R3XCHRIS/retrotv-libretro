@@ -41,16 +41,16 @@ int main(void)
   CHECK(o.theme == 0 && !o.static_vhs && !o.blip && o.pause_vhs);
   CHECK(o.overscan == 0 && o.refresh == 0 && !o.zoom_default && o.zoom_remember && !o.res240);
   CHECK(o.remote == 1);                               /* this device only */
-  CHECK(!o.dual);
+  CHECK(!o.dual && o.zaparoo);
 
   const char *kv[] = { "retrotv_banner_timeout", "0", "retrotv_clock", "12", "retrotv_leveller", "loud",
                        "retrotv_static_sound", "off", "retrotv_hints", "off", "retrotv_theme", "phosphor",
                        "retrotv_static_style", "vhs", "retrotv_blip", "on", "retrotv_overscan", "10",
                        "retrotv_refresh", "50", "retrotv_zoom_default", "zoom", "retrotv_zoom_remember", "off",
-                       "retrotv_resolution", "240", "retrotv_remote", "lan", "retrotv_dual", "on", "retrotv_pause_style", "still", NULL };
+                       "retrotv_resolution", "240", "retrotv_remote", "lan", "retrotv_dual", "on", "retrotv_pause_style", "still", "retrotv_zaparoo", "off", NULL };
   options_parse(&o, map_get, kv);
   CHECK(o.banner_secs == 0 && !o.clock24 && o.leveller == 2 && o.static_vol == 0 && !o.hints);
-  CHECK(o.theme == 2 && o.static_vhs && o.blip && !o.pause_vhs);
+  CHECK(o.theme == 2 && o.static_vhs && o.blip && !o.pause_vhs && !o.zaparoo);
   CHECK(o.overscan == 10 && o.refresh == 50 && o.zoom_default && !o.zoom_remember && o.res240 && o.remote == 2 && o.dual);
 
   const char *bad[] = { "retrotv_banner_timeout", "99", "retrotv_leveller", "LOUD", "retrotv_remote", "on", NULL };

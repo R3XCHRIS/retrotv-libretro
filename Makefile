@@ -13,7 +13,7 @@ FFINC   := deps/ffmpeg
 
 WARN    := -Wall -Wextra -Wno-unused-parameter
 CFLAGS  := -std=gnu11 -O2 -g $(WARN) -fPIC -fvisibility=hidden -Iinclude -I$(FFINC)
-SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/loud.c src/lastch.c src/epg.c src/guide.c src/options.c src/onboard.c src/testcard.c src/theme.c src/gunzip.c src/plconf.c src/remote.c src/webui.c src/vsmooth.c src/ffapi.c
+SRCS    := src/retrotv.c src/player.c src/m3u.c src/osd.c src/aspect.c src/loud.c src/lastch.c src/epg.c src/guide.c src/options.c src/onboard.c src/testcard.c src/theme.c src/gunzip.c src/plconf.c src/remote.c src/webui.c src/vsmooth.c src/zapnow.c src/ffapi.c
 
 all: build/retrotv_libretro.so build/harness
 
@@ -59,6 +59,8 @@ test: | build
 	build/test_remote
 	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_vsmooth tests/test_vsmooth.c src/vsmooth.c -lm
 	build/test_vsmooth
+	$(HOSTCC) -std=gnu11 -O1 -g $(WARN) -fsanitize=address,undefined -o build/test_zapnow tests/test_zapnow.c src/zapnow.c -lpthread
+	build/test_zapnow
 	tests/test_install.sh
 
 check: $(FFINC)/.tag | build
