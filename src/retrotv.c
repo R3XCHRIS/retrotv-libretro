@@ -188,6 +188,7 @@ typedef struct {
 static pthread_mutex_t remote_mu = PTHREAD_MUTEX_INITIALIZER;
 static remote_snap pubset;             /* under remote_mu */
 static remote_cmd rset[3];             /* under remote_mu, by screen= (0 focused, 1, 2): kind RC_SET when something waits */
+static char remote_missing[32];        /* under remote_mu: a /tune for a channel the playlist doesn't have */
 
 /* ---------- helpers ---------- */
 
@@ -1521,6 +1522,9 @@ static int remote_answer(const remote_cmd *c, remote_buf *b, void *ctx)
   case RC_TUNE:
     idx = remote_find(&chans, c->ch, c->name);
     if (idx < 0) {
+      pthread_mutex_lock(&remote_mu);                /* say so on the TV too (a card for a removed channel) */
+      snprintf(remote_missing, sizeof(remote_missing), "%s", *c->ch ? c->ch : "?");
+      pthread_mutex_unlock(&remote_mu);
       remote_puts(b, "{\"ok\":false,\"error\":\"no such channel\",\"asked\":");
       remote_json(b, *c->ch ? c->ch : c->name);
       remote_puts(b, "}");
@@ -1664,6 +1668,18 @@ static void remote_tune_here(int kind, size_t idx)
 static void remote_apply(void)
 {
   remote_apply_settings();
+  char miss[32];
+  pthread_mutex_lock(&remote_mu);
+  snprintf(miss, sizeof(miss), "%s", remote_missing);
+  remote_missing[0] = '\0';
+  pthread_mutex_unlock(&remote_mu);
+  if (*miss && !asleep) {
+    char t[sizeof(toast)];
+    if (strlen(miss) <= 5 && strcmp(miss, "?")) snprintf(t, sizeof(t), "NO CHANNEL %s", miss);
+    else snprintf(t, sizeof(t), "NO CHANNEL");
+    show_toast(t);
+    logf_(RETRO_LOG_WARN, "remote: no channel %s in the playlist", miss);
+  }
   int r = atomic_exchange(&remote_req, 0);
   if (!r || !chans.count) return;
   int kind = r & 7, target = (r >> 3) & 3;
@@ -2005,6 +2021,7 @@ RETRO_API void retro_unload_game(void)
   remote_stop();                                     /* it reads chans */
   remote_mode = 0;
   atomic_store(&remote_req, 0);
+  remote_missing[0] = '\0';
   atomic_store(&pub_cur, -1);
   for (int k = 0; k < 3; k++) rset[k].kind = RC_NONE;   /* the server is stopped: no lock needed */
   guide_shutdown();
