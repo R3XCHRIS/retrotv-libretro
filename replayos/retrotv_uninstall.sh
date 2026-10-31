@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# RetroTV for ReplayOS - remove the RetroTV system (ReplayOS 2.1.0+) and give
-# borrowed slots back: [avtest] to the A/V test pattern, [nintendo_vb] to Virtual Boy
-# and [pibench] (older installs) to PiBench.
-# Removes the core and its manifest, roms/nintendo_vb/RetroTV.vb and the Zaparoo launcher.
+# RetroTV for ReplayOS - remove the RetroTV system: the core and its manifest, the
+# remote launcher and the Zaparoo launcher. Restarts ReplayOS.
 # Leaves <storage>/retrotv (core copy, playlist, backups), roms/retrotv (your line-ups)
-# and RetroTV's settings and saves in place.
+# and RetroTV's settings and saves in place. A slot an old RetroTV version borrowed
+# (A/V test, Virtual Boy, PiBench) gets its own core back too, should one be left.
 set -euo pipefail
 [[ "${1:-}" == "NULL" ]] && shift
 
@@ -27,7 +26,7 @@ if [[ -f $STORAGE/retrotv/backup/cores.cfg.original ]]; then
   [[ -n $c && $c != retrotv_libretro.so ]] && VBCORE=$c
 fi
 tmp=$(mktemp)
-# each borrowed slot goes back to its own core: [avtest] -> avtest_libretro.so, [pibench] -> pibench_libretro.so
+# a slot an old version borrowed goes back to its own core: [avtest] -> avtest_libretro.so, [pibench] -> pibench_libretro.so
 awk -v vbcore="$VBCORE" '
   /^\[/ { sec = substr($0, 2, length($0) - 2) }
   (sec == "avtest" || sec == "pibench") && /retrotv_libretro\.so/ { split($0, kv, "="); gsub(/[[:space:]]/, "", kv[1]); print kv[1] " = \"" sec "_libretro.so\""; next }
@@ -45,7 +44,7 @@ if [[ -f $SD/zaparoo/launchers/retrotv.toml ]] || grep -qs 'retrotv_launch' "$SD
   systemctl try-restart zaparoo.service >/dev/null 2>&1 || true
   say "Zaparoo launcher removed"
 fi
-say "RetroTV system removed; [avtest], [nintendo_vb] and [pibench] restored; core removed"
+say "RetroTV removed (the core, its system and the launchers)"
 say "restarting ReplayOS in 3 s"
 # from a systemd timer: nothing of ours is left running on the storage when ReplayOS remounts it
 cd /

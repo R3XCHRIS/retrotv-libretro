@@ -10,19 +10,21 @@ static while tuning, and "NO SIGNAL" on a dead channel. The target is
 **ReplayOS on a Raspberry Pi 5**, where Alpha Player can't play stream URLs.
 The source of the streams is Dispatcharr.
 
-Status: **prototype**. It runs under our headless test frontend
-(`tests/harness.c`) and, since Oct 2026, **inside ReplayOS on the user's Pi via
-the `avtest` slot** (Extra → audio_video_test; see "Deploying into ReplayOS" below).
+Status: **released** (GitHub Releases, one-line installer). Since v0.3.0 it installs as its
+own ReplayOS system (ReplayOS 2.1.0 external systems) and runs on the user's Pi; the
+headless test frontend (`tests/harness.c`) runs it anywhere (see "Deploying into ReplayOS").
 
 ## Verified facts about the target (checked on the real Pi, Oct 2026)
 
-- Raspberry Pi 5, **ReplayOS v2.0.60**, Debian 13 (trixie) userland, **glibc 2.41**, aarch64.
+- Raspberry Pi 5, **ReplayOS 2.1.0** (from 2.0.60 on 2026-10-31; version: `dpkg-query -W replay-frontend`),
+  Debian 13 (trixie) userland, **glibc 2.41**, aarch64. RetroTV needs 2.1.0 or newer.
 - No compiler on the Pi, but the FFmpeg 7.1 shared libraries are present:
   `libavformat.so.61` (61.7.103), `libavcodec.so.61`, `libavutil.so.59`,
   `libswscale.so.8`, `libswresample.so.5`. Their input protocols include
   http, https, hls, udp, tcp, rtmp and srt.
-- ReplayOS cores live in `/opt/replay/cores/*.so`. The system → core mapping is
-  in `/opt/replay/cores/cores.cfg` (`[alpha_player] low/mid/hi = "..."`).
+- ReplayOS cores live in `/opt/replay/cores/*.so`. Built-in systems map to cores in
+  `/opt/replay/cores/cores.cfg`; external systems (RetroTV) register with a `<name>_libretro.cfg`
+  next to their core instead (see below).
 - The ReplayOS frontend is `/opt/replay/replay` (`replay.service`). Its REST
   API is on port 55356, with the token in `/media/sd/config/replay.cfg`
   (`replay_http_token`). Never hard-code or commit tokens.
@@ -73,12 +75,12 @@ features are configured in Dispatcharr and selected through the playlist URL:
 
 | File | Role |
 |---|---|
-| `src/retrotv.c` | libretro entry points, input, UI state and screens (banner, list, X menu, setup, welcome), sleep timer, guide fetch thread, saved state |
+| `src/retrotv.c` | libretro entry points, input, UI state and screens (banner, list, X menu, setup, welcome), two screens, sleep timer, guide fetch thread, update thread, saved state |
 | `src/player.c` | a stream per tune: a reader thread (FFmpeg demux → packet queue) and a decode thread → video ring (6 frames) + audio ring (3 s), audio is the master clock; old streams closed by a reaper thread; zoom crop, overscan margin, audio track choice. Pause (timeshift): the consumer stops while packets keep queuing in RAM, one 1 GiB budget for all streams (`SHIFT_MAX`, ~13 min at 10 Mbit/s); full → plays on by itself |
 | `src/ffapi.c/.h` | FFmpeg functions resolved with `dlopen` by soname. To use a new FFmpeg function, add it to `RETROTV_FF_FUNCS` and call it as `p_<name>` |
 | `src/m3u.c/.h` | IPTV M3U parser (`#EXTINF` tvg-* attributes, `x-tvg-url`, relative paths) |
 | `src/plconf.c` | playlist.txt: the playlist line and `epg=` |
-| `src/remote.c/.h` | remote control: tiny HTTP server thread on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/status`, `/channels` with logos and XMLTV `<icon>` posters, `/settings`, `/set?sleep=&audio=&leveller=&picture=&output=`); requests are queued and applied in `retro_run`, settings through the X menu's own setters (a snapshot is published for the server thread under `remote_mu`). `RETROTV_REMOTE_PORT` overrides the port (tests beside an installed RetroTV) |
+| `src/remote.c/.h` | remote control: tiny HTTP server thread on port 7474 (`/tune?ch=`, `/up`, `/down`, `/last`, `/pause` `/play` `/live`, `/focus`, `/swap`, `/update`, `/status`, `/channels` with logos and XMLTV `<icon>` posters, `/settings`, `/set?sleep=&audio=&leveller=&picture=&output=&screen2=`, `screen=` for two screens); requests are queued and applied in `retro_run`, settings through the X menu's own setters (a snapshot is published for the server thread under `remote_mu`). `RETROTV_REMOTE_PORT` overrides the port (tests beside an installed RetroTV) |
 | `src/update.c/.h` | RetroTV's own updates: release tag from GitHub's API, version compare, SHA256SUMS lookup (host tests). The thread in `retrotv.c` checks ~90 s after start and daily (option `retrotv_update_check`), and on X > Update or `/update?install=1` downloads the release to `/tmp/retrotv-update/<tag>` and runs its `install.sh` (`RETROTV_BASE=file://…`, `--no-restart`; exit 3 = restart needed) via `systemd-run`. Releases ship `install.sh` (only those can be installed this way). Tests: `RETROTV_UPDATE_CURRENT` pretends a version, `RETROTV_UPDATE_NOINSTALL` stops after the download |
 | `src/zapnow.c/.h` | tells Zaparoo Core on the Pi what's on (`media.active.update`, system Video, POST 127.0.0.1:7497/api; loopback needs no pairing): a sender thread with the newest report only, 1 s timeouts; Zaparoo's own tracker doesn't know external cores. Option `retrotv_zaparoo` (default on); `RETROTV_ZAPAROO_PORT` for tests |
 | `src/webui.html` → `src/webui.c` | the phone remote page served at `/`; edit the HTML, then `make src/webui.c` (`make check` fails if they differ). Self-contained: no external fonts or scripts |
@@ -111,99 +113,85 @@ freezing.
 - Never commit playlists, stream URLs, tokens or screenshots of private channels.
 - Keep `make test` and `make check` passing (CI runs both and the cross-build).
 
-## Deploying into ReplayOS (avtest slot — installed on the user's Pi)
+## Deploying into ReplayOS (its own system — installed on the user's Pi)
 
-ReplayOS has a hardcoded system list and `_extra` only accepts `.lr`/`.sh`, so
-RetroTV borrows the **`[avtest]`** slot (Extra → audio_video_test). Verified on
-ReplayOS 2.0.60 (Oct 2026), with sound.
+RetroTV is a **ReplayOS external system** (ReplayOS 2.1.0+; verified on the Pi 2026-10-31:
+system list entry, load_game, sound, System Settings, two screens, last channel).
 
-- **Don't use `[pibench]`: ReplayOS mutes that slot.** The core's audio is accepted
-  (`av_enable=3`, every frame taken) but nothing reaches the speaker; the same core
-  in `[avtest]` has sound. Older installs used pibench; the installer gives it back.
-- No new Extras entry is possible: `pibench.lr`/`audio_video_test.lr` are hardcoded,
-  and `/api/v1/load_game` rejects those special systems ("Invalid system").
-- ReplayOS keeps `replay.cfg` in memory and writes it on shutdown: never edit it while
-  `replay.service` runs (the edit gets overwritten). Change settings from its menu.
-  If storage silently falls back to `sd`, the systems list empties; reset it in the menu.
-
-- `replayos/retrotv_install.sh` (in `<storage>/roms/_extra/`, runs as root from
-  the Extra menu or SSH): copies `<storage>/retrotv/retrotv_libretro.so` to
-  `/opt/replay/cores/`, rewrites only `[avtest]` low/mid/hi (and gives `[pibench]`
-  back if an older install took it), backs up
-  `cores.cfg` to `<storage>/retrotv/backup/` and `cores.cfg.pre-retrotv`,
-  restarts `replay.service`. Re-run after every ReplayOS update (A/B system
-  slot replaces `/opt/replay`).
-- `replayos/retrotv_uninstall.sh` restores `[avtest]` (and `[pibench]`) and removes the core.
-- Storage backups use plain `cp`: the NFS share squashes root, so `cp -p` fails.
-- ReplayOS launches the core with `<storage>/roms/_extra/audio_video_test.lr`. The core then finds its playlist in this order: launched
-  `.m3u`, first line of the launched file, `/media/{nfs,usb,nvme,sd}/retrotv/playlist.txt`
-  (first line: URL or path), then `.../retrotv/channels.m3u`. No playlist → help screen.
-- State: the last channel is saved in the frontend's save directory, which ReplayOS sets to
-  `<storage>/saves/<system>/` (now `saves/avtest/retrotv-last-<playlist hash>.txt`). Moving
-  slots means one fresh start. The EPG comes from the playlist's `x-tvg-url`, or from an
-  `epg=<URL or path>` line in playlist.txt (overrides it; `.xml.gz` unpacked with the system
-  zlib via dlopen). Matching: tvg-id, then display name, then number (own guide only).
-  Tunarr works too: use `/api/channels.m3u` (HLS streams, guide at `/api/xmltv.xml`), not
-  `/stream/channels/N.m3u8` (that's one channel's video).
-- Core options: ReplayOS accepts core options v2 and lists them in its in-game menu as
-  **System Settings** (next to System Input, System Media, Replay Options), with a save
-  entry; changes reach the core live (GET_VARIABLE_UPDATE).
-- Logs: `/tmp/retrotv.log` on the Pi. API: `http://<pi>:55356/api/v1/get_status`
-  and `/api/v1/set_cmd?cmd=screenshot` (header `X-RePlay-Token`) → captures in
-  `<storage>/captures/<system>/` (e.g. `/media/nfs/captures/avtest/`). `get_info` reports the display refresh (50/60 Hz).
-- Users install with the one-liner (`install.sh` at the repo root, `curl … | bash` on the Pi as root):
-  it downloads the latest GitHub Release, checks `SHA256SUMS`, copies the core and the
-  Extras scripts (install, uninstall, update) and runs `retrotv_install.sh`. Releases are
-  made by `.github/workflows/release.yml` when a `v*` tag is pushed; bump `RETROTV_VERSION`.
-  Test the installer against a local copy of the release with `RETROTV_BASE=file:///dir`.
+- **Registration:** `/opt/replay/cores/retrotv_libretro.cfg` next to the core: four quoted fields,
+  `id = "retrotv"`, `name = "RetroTV"`, `extensions = "m3u|m3u8|txt"`, `devices = "pi5"`. Unknown or
+  repeated fields are rejected (so no icon or direct-launch fields); regular files, no symlinks.
+  ReplayOS reads registrations only at frontend start-up (restart RePlay). An external system
+  can't pair with a library `cores.cfg` uses. In the menu it's an orange folder: RetroTV, then
+  its line-ups. OTA updates keep unowned files in `/opt/replay/cores`, so the install survives
+  them (`cores.cfg` itself is restored by updates). Docs: replayos.com/externalcores.
+- **Line-ups:** the system's "games" are the files in `roms/retrotv/`. The core takes a launched
+  `.m3u`/`.m3u8`, a `.txt` written like playlist.txt (link, `epg=`), or a comment-only `.txt`
+  (the installer's `RetroTV.txt`), which falls back to `/media/{nfs,usb,nvme,sd}/retrotv/playlist.txt`
+  (first line: URL or path), then `.../retrotv/channels.m3u`. No playlist → setup screen.
+- **State:** saves in `<storage>/saves/retrotv/` (`retrotv-last-<playlist hash>.txt`: one per
+  line-up), settings in `config/settings/system/<crt|lcd>/retrotv.cfg`. The EPG comes from the
+  playlist's `x-tvg-url`, or an `epg=` line (overrides it; `.xml.gz` via the system zlib).
+  Matching: tvg-id, then display name, then number (own guide only). Tunarr: use
+  `/api/channels.m3u` (guide at `/api/xmltv.xml`), not `/stream/channels/N.m3u8`.
+- **Installers:** users run the one-liner (`install.sh` at the repo root, `curl … | bash` on the Pi
+  as root). It checks ReplayOS is 2.1.0+, downloads the latest GitHub Release, checks `SHA256SUMS`,
+  copies the core to `<storage>/retrotv/` and the Extras scripts (install, uninstall, update) to
+  `roms/_extra/`, and runs `replayos/retrotv_install.sh`: core + manifest into `/opt/replay/cores`
+  (new file then `mv`, never over the running core), `roms/retrotv/RetroTV.txt`, the remote
+  launcher to `/media/sd/retrotv/`, the Zaparoo launcher file, then a ReplayOS restart through
+  `systemd-run` (nothing of ours left running on NFS). `--no-restart` (RetroTV's own updater)
+  skips the restart and exits 3 when one is still needed. It also moves an install from before
+  2.1.0 over (those borrowed the avtest/nintendo_vb/pibench slots): slots get their own cores
+  back (backup in `<storage>/retrotv/backup/`), settings and saves are copied. `--slot` is
+  accepted and ignored. `retrotv_uninstall.sh` removes the core, manifest and launchers.
+  Storage backups use plain `cp` (the NFS share squashes root, so `cp -p` fails).
+  `tests/test_install.sh` runs both against a fake ReplayOS in a user namespace (`unshare -r`).
+- **Releases:** `.github/workflows/release.yml` on a `v*` tag; bump `RETROTV_VERSION` first. Releases
+  ship `install.sh` (RetroTV's in-core updater needs it). Test the installer against a local copy
+  of a release with `RETROTV_BASE=file:///dir`.
+- **ReplayOS facts:** `replay.cfg` lives in memory and is written on shutdown: never edit it while
+  `replay.service` runs (the edit gets overwritten); change settings from its menu. If storage
+  silently falls back to `sd`, the systems list empties; reset it in the menu.
+  `audio_system_volume = "0"` means volume **Off** (scale 10…0). Core options v2 show in the
+  in-game menu as **System Settings** (with a save entry); changes reach the core live.
+- **Logs and API:** `/tmp/retrotv.log` on the Pi (the harness writes there too). ReplayOS API on
+  55356, header `X-RePlay-Token` (`replay_http_token` in replay.cfg; never print or commit it):
+  `get_status` (`core_info`, `system`), `get_info` (display refresh), `load_game?system=retrotv&
+  game_file=RetroTV.txt`, `set_cmd?cmd=screenshot` → `<storage>/captures/retrotv/`. There's no
+  "quit game" command. Errors and rejected registrations: `/var/log/replay.log`.
+- **Remote start:** `replayos/retrotv_launch.sh [channel | retrotv://channel]`, installed to
+  **/media/sd/retrotv/** (the SD card): starts RetroTV through load_game if it isn't running, then
+  tunes. Lesson: a ReplayOS restart remounts NFS storage, and a script running from `/media/nfs`
+  during it keeps the share busy, so ReplayOS falls back to `system_storage = "sd"`.
+- **Autostart** (facts verified on 2.0.60): ReplayOS reads a file in `<storage>/roms/_autostart/`
+  at start; its content is a path appended to the storage root (starts with `/`), and the core
+  comes from the parent folder's system. For RetroTV that's `/roms/retrotv/RetroTV.txt` (not yet
+  tried on 2.1). On 2.0.60 an autostarted game with its own Dual horizontal setting segfaulted
+  ReplayOS at start-up, so don't test autostart on the user's Pi casually.
+- **Zaparoo Core** (user-installed in `/media/sd/zaparoo/`, API on 7497, loopback needs no pairing):
+  its launch on ReplayOS first "stops the active launcher" = **restarts replay.service**, so channel
+  cards use `**execute:bash /media/sd/retrotv/retrotv_launch.sh <ch>` (the installer adds the
+  `allow_execute` rule). `retrotv-zaparoo.toml` registers a RetroTV virtual system and the
+  `RetroTVChannel` launcher (`schemes = ["retrotv"]`: Zaparoo history items); Zaparoo rejects
+  `name` on non-virtual launchers. Its tracker doesn't know external cores, so RetroTV reports
+  what's on itself (`zapnow.c`). Its virtual gamepad is player 2 (RetroTV reads players 1-4), and
+  menus need ReplayOS's "all players control the UI".
 - Screenshots for the docs: `PI=root@<pi> scripts/demo-shots.sh` (demo line-up, never real channels).
-- Autostart (verified 2.0.60): ReplayOS reads a file in `<storage>/roms/_autostart/` at start
-  (we used the name `audio_video_test.lr`). Its content is a path appended to the storage root
-  with no slash, so it starts with `/`: `/roms/avtest/retrotv.lr`. The core comes from the
-  parent folder's name → `cores.cfg` section, which is why `_extra/...` fails ("Failed to
-  identify the core") and an empty `roms/avtest/retrotv.lr` works. Errors: `/var/log/replay.log`.
-- Zaparoo Core (user-installed in `/media/sd/zaparoo/`, API on 7497): its `**launch:` can't
-  start Extras; use autostart. Its virtual gamepad is player 2 (RetroTV reads players 1-4),
-  and menus need ReplayOS's "all players control the UI". Tags tune with
-  `**http.get:http://127.0.0.1:7474/tune?ch=<n>` (RetroTV's remote control option).
 - **Two screens** (verified 2026-10-17 with two CRTs on the Pi's HDMI ports): ReplayOS "Multi screen"
   (`video_monitor_multi_mode`, or per system/game `replay_video_monitor_multi_mode`) = Dual
   horizontal (2) splits one core picture: left half → screen 1, right half → screen 2. Rules learned
   the hard way: both screens connected at boot; **never change geometry or refresh while running**
   (SET_SYSTEM_AV_INFO → page flips fail, main CRT flashes until reboot); Dual smart applies only to
-  dual-screen arcade games; per-game Dual horizontal + `_autostart` = ReplayOS segfault at start-up.
-  Dual modes ReplayOS picks: 1280x480 → `1920x480i` (39.147 MHz, 2496x523) on both outputs;
-  1280x240 → `1920x240p` (39.04 MHz, 2494x261). After any mode change the two outputs start with a
-  random phase; out of step, ReplayOS runs at exactly half rate (retro_run every 33 ms). A
-  re-sent identical mode is ignored, a 1-frame bounce doesn't fully restart the outputs, and a
+  dual-screen arcade games. Dual modes ReplayOS picks: 1280x480 → `1920x480i` (39.147 MHz, 2496x523)
+  on both outputs; 1280x240 → `1920x240p` (39.04 MHz, 2494x261). After any mode change the two outputs
+  start with a random phase; out of step, ReplayOS runs at exactly half rate (retro_run every 33 ms).
+  A re-sent identical mode is ignored, a 1-frame bounce doesn't fully restart the outputs, and a
   1 s bounce is only a coin toss, so the size is fixed per session and RetroTV just logs it.
   A loose RGB-Pi v2 HDMI-to-SCART adapter caused most of the "lost sync" flicker blamed on modes.
-  RetroTV's `retrotv_dual` option (read at load) gives a fixed 1280x480 (or 1280x240 with Output 240p) at 60 Hz: the globals are the
-  focused screen, `other` the second; `exchange()` swaps them (see the comment in `src/retrotv.c`).
-- **Virtual Boy slot** (`--slot vb|both`, verified 2026-10-17): `[nintendo_vb]` → RetroTV plus an empty
-  `roms/nintendo_vb/RetroTV.vb`; `GET /api/v1/load_game?system=nintendo_vb&game_file=RetroTV.vb`
-  (token header) starts it from the menu: no autostart, no restart. Settings and saves are per
-  system (`config/settings/system/<crt|lcd>/nintendo_vb.cfg`, `saves/nintendo_vb/`).
-  `replayos/retrotv_launch.sh` (installed to **/media/sd/retrotv/**) starts and tunes it.
-  Lessons: Zaparoo's launch on ReplayOS first "stops the active launcher" = **restarts
-  replay.service**; a script running from `/media/nfs` during that restart keeps the share busy
-  and ReplayOS falls back to `system_storage = "sd"` (systems list empties). So the launcher
-  lives on the SD card and channel cards use `**execute` (allow_execute), not launches.
-  `audio_system_volume = "0"` in replay.cfg means volume **Off** (scale 10…0).
-- **ReplayOS 2.1.0 external systems** (the author's user-cores hook; **verified on the Pi
-  2026-10-31**: system list entry, load_game, sound, System Settings, two screens with the copied
-  Dual horizontal setting, last channel; FFmpeg still 7.1): a `retrotv_libretro.cfg` next to the core in
-  `/opt/replay/cores/` (four quoted fields: `id = "retrotv"`, `name`, `extensions = "m3u|m3u8|txt"`,
-  `devices = "pi5"`; unknown or repeated fields are rejected; regular files, no symlinks) makes
-  RetroTV its own system, read only at frontend start-up (restart RePlay). Its "games" are the files in
-  `roms/retrotv/`: RetroTV already takes a launched `.m3u`, a `.txt` like playlist.txt, or a
-  comment-only `.txt` (→ `retrotv/playlist.txt`). Saves/settings use the id (`saves/retrotv/`,
-  `config/settings/system/<crt|lcd>/retrotv.cfg`). OTA updates keep unowned files in the cores
-  folder. An external system can't pair with a library `cores.cfg` uses, so the installer gives
-  the borrowed slots back. `retrotv_install.sh --slot system` (default on 2.1.0+, from
-  `dpkg-query replay-frontend`) does all this, seeds settings/saves from nintendo_vb/avtest and
-  restarts via `systemd-run` (nothing left running on NFS). Launcher: `load_game?system=retrotv&
-  game_file=RetroTV.txt`. `tests/test_install.sh` tests the scripts in a fake root (`unshare -r`).
+  RetroTV's `retrotv_dual` option (read at load) gives a fixed 1280x480 (or 1280x240 with Output 240p)
+  at 60 Hz: the globals are the focused screen, `other` the second; `exchange()` swaps them (see the
+  comment in `src/retrotv.c`).
 
 ## Roadmap and design
 

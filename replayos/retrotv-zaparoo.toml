@@ -1,6 +1,5 @@
 # RetroTV for Zaparoo Core (ReplayOS). Installed by retrotv_install.sh into
-# Zaparoo's launchers folder when Zaparoo is found (needs the RetroTV system,
-# ReplayOS 2.1.0+, or the Virtual Boy slot).
+# Zaparoo's launchers folder when Zaparoo is found.
 #
 # "RetroTV" appears as a system in the Zaparoo App: picking it, or a card
 # written from it, starts RetroTV. Like every Zaparoo launch on ReplayOS, it
