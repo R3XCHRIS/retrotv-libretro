@@ -41,7 +41,7 @@ real 240p mode, and it uses ReplayOS's own FFmpeg, so there's nothing else to in
 - **Sleep timer**, audio track choice, **colour themes** and a VHS tuning look
 - **Remote control** over HTTP: tune a channel from Zaparoo, a script or a phone
 - **Built-in test card** and a setup screen that explains what's wrong in plain words
-- Works with **Dispatcharr**, **Tunarr** or any M3U playlist with MPEG-TS or HLS streams
+- Works with **Dispatcharr**, **Tunarr**, free **[Pluto TV](docs/PLUTO_TV.md)** channels or any M3U playlist with MPEG-TS or HLS streams
 
 ## Install
 
@@ -335,6 +335,8 @@ starting with `/`). See the caution under [Two screens](#two-screens) first.
   RetroTV doesn't use Dispatcharr's API and needs no key.
 - **Tunarr:** use `/api/channels.m3u`, not `/stream/channels/N.m3u8` (that's a
   single channel's video). The guide comes along.
+- **Free channels:** [![Pluto TV: free live channels](https://img.shields.io/badge/Pluto%20TV-free%20live%20channels-FFF200?style=flat&labelColor=000000)](docs/PLUTO_TV.md)
+  ready-made playlists with a TV guide, added as a line-up of their own. See [Pluto TV](docs/PLUTO_TV.md).
 - **Anything else:** an M3U with HTTP(S) MPEG-TS or HLS streams. Add `epg=` for a guide.
 
 ## Troubleshooting
