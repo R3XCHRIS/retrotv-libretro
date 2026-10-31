@@ -69,6 +69,9 @@ static const opt_def OPTS[] = {
   { "retrotv_remote", "Remote control",
     "Tune by web request on port 7474, e.g. /tune?ch=36. This device only: Zaparoo and scripts on the Pi. Home network: also phones and computers on your network, with no password.",
     "remote", "local", { { "local", "This device only" }, { "lan", "Home network" }, { "off", "Off" } } },
+  { "retrotv_zaparoo", "Tell Zaparoo what's on",
+    "Shows the channel you're watching in the Zaparoo app (as a Video item). Only talks to Zaparoo on this device; does nothing without it.",
+    "remote", "on", { { "on", "On" }, { "off", "Off" } } },
 };
 #define NOPTS ((int)(sizeof(OPTS) / sizeof(OPTS[0])))
 #define NCATS ((int)(sizeof(CATS) / sizeof(CATS[0])))
@@ -118,6 +121,7 @@ void options_parse(rtv_options *o, const char *(*get)(const char *key, void *ctx
   o->dual = !strcmp(val("retrotv_dual", get, ctx), "on");
   const char *rc = val("retrotv_remote", get, ctx);
   o->remote = !strcmp(rc, "off") ? 0 : !strcmp(rc, "lan") ? 2 : 1;
+  o->zaparoo = !strcmp(val("retrotv_zaparoo", get, ctx), "on");
 }
 
 void options_defaults(rtv_options *o) { options_parse(o, NULL, NULL); }

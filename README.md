@@ -178,6 +178,7 @@ watch: they apply immediately and last until you quit.
 | | Tuning picture | Classic snow, VHS |
 | | Paused picture | VHS tape (a VCR's shaky still frame with a noise bar), Still picture |
 | Remote control | Remote control | This device only, Home network, Off |
+| | Tell Zaparoo what's on | On, Off |
 
 <p align="center">
   <img src="docs/screenshots/theme-teletext.png" width="266" alt="Teletext theme">
@@ -312,6 +313,11 @@ restarts it remounts network storage, and a script running from there would bloc
   `**execute:bash /media/sd/retrotv/retrotv_launch.sh 36` to a card. The installer
   adds the matching `allow_execute` rule to Zaparoo's `config.toml` (backup in
   `config.toml.before-retrotv`).
+
+Zaparoo doesn't recognise RetroTV's core, so RetroTV tells it what's on itself: the
+Zaparoo app shows the channel you're watching (e.g. *Video · RetroTV: 36 Star Trek*).
+Turn it off with **System Settings → Tell Zaparoo what's on**. Write channel cards with
+the ZapScript above, not the app's "write what's playing" (that card wouldn't tune).
 
 **Start RetroTV with ReplayOS** (a cable box that comes on with the TV): ReplayOS
 launches whatever an autostart file names. On the Pi, as root (replace `nfs` with
