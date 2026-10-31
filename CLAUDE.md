@@ -188,8 +188,9 @@ ReplayOS 2.0.60 (Oct 2026), with sound.
   and ReplayOS falls back to `system_storage = "sd"` (systems list empties). So the launcher
   lives on the SD card and channel cards use `**execute` (allow_execute), not launches.
   `audio_system_volume = "0"` in replay.cfg means volume **Off** (scale 10…0).
-- **ReplayOS 2.1.0 external systems** (the author's user-cores hook; docs received 2026-10-29,
-  not yet tested on the Pi, which runs 2.0.60): a `retrotv_libretro.cfg` next to the core in
+- **ReplayOS 2.1.0 external systems** (the author's user-cores hook; **verified on the Pi
+  2026-10-31**: system list entry, load_game, sound, System Settings, two screens with the copied
+  Dual horizontal setting, last channel; FFmpeg still 7.1): a `retrotv_libretro.cfg` next to the core in
   `/opt/replay/cores/` (four quoted fields: `id = "retrotv"`, `name`, `extensions = "m3u|m3u8|txt"`,
   `devices = "pi5"`; unknown or repeated fields are rejected; regular files, no symlinks) makes
   RetroTV its own system, read only at frontend start-up (restart RePlay). Its "games" are the files in
